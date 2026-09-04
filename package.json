@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "format:check": "prettier --check \"**/*.{js,mjs,cjs,ts,tsx,json,jsonc,yml,yaml,css,html}\"",
-    "lint": "eslint . --max-warnings=0",
-    "typecheck": "node scripts/typecheck-if-present.mjs"
+    "format:check": "prettier --config static-analysis/formatters/prettier.json --ignore-path static-analysis/formatters/prettierignore --check \"**/*.{js,mjs,cjs,ts,tsx,json,jsonc,yml,yaml,css,html}\"",
+    "lint": "eslint . --config static-analysis/linters/eslint.config.mjs --max-warnings=0",
+    "typecheck": "node static-analysis/type-safety/typecheck-if-present.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

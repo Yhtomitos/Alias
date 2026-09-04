@@ -1459,15 +1459,16 @@ relevant checks before handing work back.
 
 Required baseline:
 
-- Rust formatting: `cargo fmt --all --check`
+- Rust formatting: `cargo fmt --all --check -- --config-path static-analysis/formatters/rustfmt.toml`
 - Rust linting: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- Rust dependency policy: `cargo deny check`
+- Rust dependency policy: `cargo deny --config static-analysis/dependency-policy/deny.toml check`
 - JS/TS formatting: `npm run format:check`
 - JS/TS linting: `npm run lint`
 - Type safety: `npm run typecheck` with TypeScript `strict` mode enabled
 - Dependency vulnerability scanning: `osv-scanner scan source --lockfile=Cargo.lock` and scan
   `package-lock.json` when present
-- Secret detection: `gitleaks detect --source . --config .gitleaks.toml --redact --no-banner`
+- Secret detection:
+  `gitleaks detect --source . --config static-analysis/secret-detection/gitleaks.toml --redact --no-banner`
 - Repo SAST: keep GitHub CodeQL enabled for Rust and JavaScript/TypeScript
 - Tauri hardening: when a Tauri app exists, require an explicit CSP and review
   `src-tauri/capabilities/*.json` so frontend-to-Rust privileges stay minimal

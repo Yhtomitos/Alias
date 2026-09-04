@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const ignoredDirectories = new Set([".git", "build", "coverage", "dist", "node_modules", "target"]);
-const roots = ["apps", "packages", "src"];
+const repoRoot = resolve(import.meta.dirname, "../..");
+const roots = ["apps", "packages", "src"].map((root) => join(repoRoot, root));
+const tsconfigPath = join(repoRoot, "static-analysis/type-safety/tsconfig.json");
 
 function hasTypeScriptSource(directory) {
   let entries;
@@ -35,5 +37,8 @@ if (!roots.some(hasTypeScriptSource)) {
   process.exit(0);
 }
 
-const result = spawnSync("tsc", ["--noEmit"], { shell: true, stdio: "inherit" });
+const result = spawnSync("tsc", ["--noEmit", "--project", tsconfigPath], {
+  shell: true,
+  stdio: "inherit"
+});
 process.exit(result.status ?? 1);

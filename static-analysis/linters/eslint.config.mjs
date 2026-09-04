@@ -1,6 +1,9 @@
 import js from "@eslint/js";
 import globals from "globals";
+import { resolve } from "node:path";
 import tseslint from "typescript-eslint";
+
+const repoRoot = resolve(import.meta.dirname, "../..");
 
 export default [
   {
@@ -28,8 +31,8 @@ export default [
         ...globals.node
       },
       parserOptions: {
-        project: "./tsconfig.json",
-        tsconfigRootDir: import.meta.dirname
+        project: "./static-analysis/type-safety/tsconfig.json",
+        tsconfigRootDir: repoRoot
       }
     }
   }

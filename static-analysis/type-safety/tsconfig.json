@@ -18,12 +18,12 @@
     "types": []
   },
   "include": [
-    "apps/**/*.ts",
-    "apps/**/*.tsx",
-    "packages/**/*.ts",
-    "packages/**/*.tsx",
-    "src/**/*.ts",
-    "src/**/*.tsx"
+    "../../apps/**/*.ts",
+    "../../apps/**/*.tsx",
+    "../../packages/**/*.ts",
+    "../../packages/**/*.tsx",
+    "../../src/**/*.ts",
+    "../../src/**/*.tsx"
   ],
-  "exclude": ["node_modules", "target", "dist", "build"]
+  "exclude": ["../../node_modules", "../../target", "../../dist", "../../build"]
 }

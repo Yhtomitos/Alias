@@ -36,3 +36,4 @@ RUN curl -fsSL "https://github.com/google/osv-scanner/releases/download/v${OSV_S
     && chmod +x /usr/local/bin/osv-scanner
 
 WORKDIR /workspace
+
