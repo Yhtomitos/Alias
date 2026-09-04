@@ -1,0 +1,30 @@
+name: Static Analysis
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  static-analysis:
+    name: Containerized static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build analysis image
+        run: docker build -t alias-static-analysis -f .github/static-analysis/Dockerfile .
+
+      - name: Run analysis checks
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            alias-static-analysis \
+            bash .github/static-analysis/run-static-analysis.sh

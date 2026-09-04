@@ -1,0 +1,17 @@
+title = "Alias gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Repository documentation placeholders"
+paths = [
+    '''AGENT\.md''',
+    '''README\.md''',
+    '''docs/.*''',
+]
+regexes = [
+    '''example@example\.com''',
+    '''<opaque-[^>]+>''',
+]
+

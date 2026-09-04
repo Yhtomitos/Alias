@@ -1452,6 +1452,31 @@ agent_recommendation_generated agent=duplicate_detector
 
 # Testing Priorities
 
+## Static Analysis Requirements
+
+When making code or dependency changes, keep the repository's static analysis setup current and run the
+relevant checks before handing work back.
+
+Required baseline:
+
+- Rust formatting: `cargo fmt --all --check`
+- Rust linting: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- Rust dependency policy: `cargo deny check`
+- JS/TS formatting: `npm run format:check`
+- JS/TS linting: `npm run lint`
+- Type safety: `npm run typecheck` with TypeScript `strict` mode enabled
+- Dependency vulnerability scanning: `osv-scanner scan source --lockfile=Cargo.lock` and scan
+  `package-lock.json` when present
+- Secret detection: `gitleaks detect --source . --config .gitleaks.toml --redact --no-banner`
+- Repo SAST: keep GitHub CodeQL enabled for Rust and JavaScript/TypeScript
+- Tauri hardening: when a Tauri app exists, require an explicit CSP and review
+  `src-tauri/capabilities/*.json` so frontend-to-Rust privileges stay minimal
+
+Prefer the GitHub Actions Docker-based static analysis workflow when checking the full suite, because it
+pins the operating system, Rust components, Node version, and external scanners to reduce
+machine-specific differences. If a local machine does not have these tools installed, use the Docker
+image rather than weakening or skipping the checks.
+
 ## Cryptography
 
 - [ ] encrypt/decrypt roundtrip
