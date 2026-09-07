@@ -38,6 +38,41 @@ The product should behave as a local digital identity manager rather than only a
 
 # Product Principles
 
+## Implementation Brainstorming
+
+When brainstorming implementation approaches:
+
+- Present multiple implementation options in list format.
+- Clearly mark which option or options are recommended.
+- Explain the technical debt introduced or avoided by each option.
+
+Prefer recommendations that preserve the project's privacy, security, maintainability, and low-cost goals.
+
+---
+
+## Model Selection for Brainstorming and Implementation
+
+Use stronger reasoning models for security-sensitive implementation choices, especially where mistakes could expose secrets, weaken authorization, or compromise vault recovery.
+
+| Code area | Minimum model to use | Reasoning level |
+| --- | --- | --- |
+| UI, styling, ordinary CRUD | GPT-5.5 / equivalent | Normal |
+| Domain structs, graph logic, basic agents | GPT-5.5 or GPT-5.6 Terra | Normal / Medium |
+| AWS CDK boilerplate | GPT-5.5+ | Medium |
+| Authentication integration | **GPT-5.6 Sol** | **High** |
+| Authorization / ownership checks | **GPT-5.6 Sol** | **High** |
+| Tauri IPC permissions | **GPT-5.6 Sol** | **High** |
+| Secret handling / logging policy | **GPT-5.6 Sol** | **High** |
+| Agent permission enforcement | **GPT-5.6 Sol** | **High** |
+| Encrypted sync / replay protection | **GPT-5.6 Sol** | **High** |
+| Key derivation / key wrapping | **GPT-5.6 Sol** | **High-Extra High** |
+| Vault recovery / device enrollment | **GPT-5.6 Sol** | **High-Extra High** |
+| Cryptographic architecture | **GPT-5.6 Sol** | **Extra High if available** |
+
+When brainstorming implementation options, state whether the current task falls into a normal, medium, high, or extra-high reasoning category. For high and extra-high categories, prefer GPT-5.6 Sol or the strongest available equivalent before finalizing architecture or implementation.
+
+---
+
 ## 1. Zero-Knowledge by Design
 
 Sensitive account data must be encrypted before leaving the user's device.
