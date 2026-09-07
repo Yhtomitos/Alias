@@ -38,6 +38,19 @@ The product should behave as a local digital identity manager rather than only a
 
 # Product Principles
 
+## Implementation Brainstorming
+
+When brainstorming implementation approaches:
+
+- Present multiple implementation options in list format.
+- Clearly mark which option or options are recommended.
+- Explain the technical debt introduced or avoided by each option.
+
+Prefer recommendations that preserve the project's privacy, security, maintainability, and low-cost goals.
+
+---
+
+
 ## 1. Zero-Knowledge by Design
 
 Sensitive account data must be encrypted before leaving the user's device.
