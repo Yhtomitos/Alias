@@ -41,7 +41,11 @@ pub struct AccountRelationship {
 }
 
 impl AccountRelationship {
-    pub fn new(source_account_id: Uuid, target_account_id: Uuid, relationship_type: RelationshipType) -> Self {
+    pub fn new(
+        source_account_id: Uuid,
+        target_account_id: Uuid,
+        relationship_type: RelationshipType,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             source_account_id,
@@ -69,7 +73,11 @@ impl IdentityGraph {
         self.personas.insert(persona.id, persona);
     }
 
-    pub fn assign_account_to_persona(&mut self, account_id: Uuid, persona_id: Uuid) -> Result<(), GraphError> {
+    pub fn assign_account_to_persona(
+        &mut self,
+        account_id: Uuid,
+        persona_id: Uuid,
+    ) -> Result<(), GraphError> {
         if !self.personas.contains_key(&persona_id) {
             return Err(GraphError::PersonaNotFound);
         }
@@ -85,7 +93,13 @@ impl IdentityGraph {
     pub fn accounts_for_persona(&self, persona_id: Uuid) -> Vec<Uuid> {
         self.account_personas
             .iter()
-            .filter_map(|(account_id, assigned_persona)| if *assigned_persona == persona_id { Some(*account_id) } else { None })
+            .filter_map(|(account_id, assigned_persona)| {
+                if *assigned_persona == persona_id {
+                    Some(*account_id)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
@@ -146,7 +160,11 @@ mod tests {
         let c = Uuid::new_v4();
 
         graph.add_relationship(AccountRelationship::new(a, b, RelationshipType::Dependency));
-        graph.add_relationship(AccountRelationship::new(b, c, RelationshipType::RecoveryEmail));
+        graph.add_relationship(AccountRelationship::new(
+            b,
+            c,
+            RelationshipType::RecoveryEmail,
+        ));
 
         let dependents = graph.dependent_accounts(a);
         assert_eq!(dependents.len(), 2);

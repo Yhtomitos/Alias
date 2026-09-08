@@ -44,8 +44,16 @@ pub enum CryptoError {
 
 pub trait CryptoCore {
     fn generate_random_key(&self) -> SecretBytes;
-    fn encrypt_record(&self, _master_key: &SecretBytes, _plaintext: &[u8]) -> Result<EncryptedRecord, CryptoError>;
-    fn decrypt_record(&self, _master_key: &SecretBytes, _record: &EncryptedRecord) -> Result<Vec<u8>, CryptoError>;
+    fn encrypt_record(
+        &self,
+        _master_key: &SecretBytes,
+        _plaintext: &[u8],
+    ) -> Result<EncryptedRecord, CryptoError>;
+    fn decrypt_record(
+        &self,
+        _master_key: &SecretBytes,
+        _record: &EncryptedRecord,
+    ) -> Result<Vec<u8>, CryptoError>;
 }
 
 #[derive(Debug, Default)]
@@ -58,11 +66,19 @@ impl CryptoCore for PlaceholderCryptoCore {
         SecretBytes::new(bytes)
     }
 
-    fn encrypt_record(&self, _master_key: &SecretBytes, _plaintext: &[u8]) -> Result<EncryptedRecord, CryptoError> {
+    fn encrypt_record(
+        &self,
+        _master_key: &SecretBytes,
+        _plaintext: &[u8],
+    ) -> Result<EncryptedRecord, CryptoError> {
         Err(CryptoError::NotImplemented)
     }
 
-    fn decrypt_record(&self, _master_key: &SecretBytes, _record: &EncryptedRecord) -> Result<Vec<u8>, CryptoError> {
+    fn decrypt_record(
+        &self,
+        _master_key: &SecretBytes,
+        _record: &EncryptedRecord,
+    ) -> Result<Vec<u8>, CryptoError> {
         Err(CryptoError::NotImplemented)
     }
 }

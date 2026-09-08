@@ -146,7 +146,10 @@ impl VaultService for InMemoryVaultService {
 
     fn get_record(&self, id: Uuid) -> Result<VaultRecord, VaultError> {
         self.ensure_unlocked()?;
-        self.records.get(&id).cloned().ok_or(VaultError::RecordNotFound)
+        self.records
+            .get(&id)
+            .cloned()
+            .ok_or(VaultError::RecordNotFound)
     }
 
     fn list_records(&self) -> Result<Vec<VaultRecord>, VaultError> {
@@ -165,7 +168,10 @@ impl VaultService for InMemoryVaultService {
 
     fn delete_record(&mut self, id: Uuid) -> Result<(), VaultError> {
         self.ensure_unlocked()?;
-        self.records.remove(&id).map(|_| ()).ok_or(VaultError::RecordNotFound)
+        self.records
+            .remove(&id)
+            .map(|_| ())
+            .ok_or(VaultError::RecordNotFound)
     }
 
     fn lock(&mut self) -> Result<(), VaultError> {
@@ -203,7 +209,8 @@ mod tests {
         record.credentials.password = Some(SecretString::new("p@ssw0rd"));
 
         let serialized = serde_json::to_string(&record).expect("record should serialize");
-        let restored: VaultRecord = serde_json::from_str(&serialized).expect("record should deserialize");
+        let restored: VaultRecord =
+            serde_json::from_str(&serialized).expect("record should deserialize");
 
         assert_eq!(record, restored);
     }
@@ -215,7 +222,9 @@ mod tests {
 
         let record = VaultRecord::new("Discord");
         let id = record.id;
-        service.create_record(record).expect("record should be inserted");
+        service
+            .create_record(record)
+            .expect("record should be inserted");
         assert!(service.get_record(id).is_ok());
 
         service.lock().expect("vault should lock");
