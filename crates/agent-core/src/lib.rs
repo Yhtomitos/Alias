@@ -153,7 +153,10 @@ fn ngrams(value: &str, n: usize) -> HashSet<String> {
 }
 
 pub fn numeric_suffix_similarity(lhs: &str, rhs: &str) -> f32 {
-    match (numeric_suffix(&normalize_username(lhs)), numeric_suffix(&normalize_username(rhs))) {
+    match (
+        numeric_suffix(&normalize_username(lhs)),
+        numeric_suffix(&normalize_username(rhs)),
+    ) {
         (Some(lhs), Some(rhs)) if lhs == rhs => 1.0,
         (Some(_), Some(_)) => 0.0,
         (None, None) => 1.0,
@@ -219,7 +222,9 @@ impl Agent for UsernamePersonaAgent {
         let mut recommendations = Vec::new();
         for (idx, lhs_account) in context.accounts.iter().enumerate() {
             for rhs_account in context.accounts.iter().skip(idx + 1) {
-                let (Some(lhs_username), Some(rhs_username)) = (&lhs_account.username, &rhs_account.username) else {
+                let (Some(lhs_username), Some(rhs_username)) =
+                    (&lhs_account.username, &rhs_account.username)
+                else {
                     continue;
                 };
 
@@ -228,7 +233,8 @@ impl Agent for UsernamePersonaAgent {
                     continue;
                 }
 
-                let normalized_match = normalize_username(lhs_username) == normalize_username(rhs_username);
+                let normalized_match =
+                    normalize_username(lhs_username) == normalize_username(rhs_username);
                 let matching_suffix = numeric_suffix_similarity(lhs_username, rhs_username) == 1.0;
 
                 let mut reasons = vec![format!(
@@ -243,7 +249,12 @@ impl Agent for UsernamePersonaAgent {
                 }
 
                 recommendations.push(Recommendation {
-                    id: format!("{}:{}:{}", self.id(), lhs_account.record_id, rhs_account.record_id),
+                    id: format!(
+                        "{}:{}:{}",
+                        self.id(),
+                        lhs_account.record_id,
+                        rhs_account.record_id
+                    ),
                     agent_id: self.id().to_string(),
                     title: format!(
                         "Potential persona relationship: {} and {}",
@@ -269,8 +280,8 @@ impl Agent for UsernamePersonaAgent {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountView, Agent, AgentContext, AgentError, AgentPermissions, UsernamePersonaAgent, combined_username_score,
-        normalize_username,
+        AccountView, Agent, AgentContext, AgentError, AgentPermissions, UsernamePersonaAgent,
+        combined_username_score, normalize_username,
     };
     use uuid::Uuid;
 
