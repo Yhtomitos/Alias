@@ -1,4 +1,4 @@
-FROM rust:1.98.1-bookworm
+FROM rust:1.98.0-bookworm
 
 ARG CARGO_DENY_VERSION=0.20.2
 ARG GITLEAKS_VERSION=8.30.1
