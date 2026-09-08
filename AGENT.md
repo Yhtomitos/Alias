@@ -36,6 +36,66 @@ The product should behave as a local digital identity manager rather than only a
 
 ---
 
+# Project Documentation API
+
+Agents must treat documentation as part of the public project API. Any change that adds, removes, renames, or changes behavior for a public API, serialized format, security boundary, agent permission, command, configuration shape, or user-facing workflow must update the corresponding documentation in the same change.
+
+Primary project documentation standard:
+
+```text
+docs/api-documentation.md
+```
+
+## Required Agent Documentation Workflow
+
+Before finishing a code or architecture change, agents must:
+
+1. Identify public APIs, exported types, schemas, commands, security assumptions, and user-facing workflows touched by the change.
+2. Update language-native API documentation next to the code.
+3. Update Markdown documentation under `docs/` when architecture, threat model, crypto format, identity graph behavior, agent security, or contribution workflow changes.
+4. Keep documentation focused on behavior, contracts, errors, safety assumptions, examples, and side effects.
+5. Avoid comments that repeat obvious information already expressed by names or types.
+6. Run relevant tests, formatters, linters, or documentation checks when available.
+
+## Language Documentation Conventions
+
+| Language | Required convention | What agents must enforce |
+| --- | --- | --- |
+| Rust | `rustdoc` documentation comments | Use `///` for public items and `//!` for crate/module docs; document public APIs, errors, safety assumptions, invariants, and examples. |
+| Rust | Rust API documentation conventions | Describe behavior and contracts rather than implementation details. |
+| TypeScript | JSDoc/TSDoc-style comments | Use `/** ... */` for exported/public APIs; use `//` for non-obvious implementation reasoning. |
+| TypeScript | Practical TypeScript documentation style | Document exported APIs without repeating information already obvious from types. |
+| Python | PEP 257 docstrings | Use triple-double-quoted docstrings for public modules, classes, and functions; describe args, returns, exceptions, and side effects. |
+| Python | PEP 8 comments | Use complete-sentence comments that explain why, not obvious code. |
+| HTML | HTML comments | Use comments sparingly for structural or non-obvious decisions. |
+| CSS | CSS comment conventions | Use `/* ... */`; document unusual layout, security, or accessibility decisions. |
+| Markdown | CommonMark | Use Markdown for architecture, security, contribution, and project documentation. |
+
+Reference sources:
+
+- Rustdoc: <https://doc.rust-lang.org/rustdoc/how-to-write-documentation.html>
+- Rust RFC 505: <https://rust-lang.github.io/rfcs/0505-api-comment-conventions.html>
+- TypeScript JSDoc: <https://www.typescriptlang.org/docs/handbook/jsdoc-supported-types.html>
+- Google TypeScript Style Guide: <https://google.github.io/styleguide/tsguide.html>
+- PEP 257: <https://peps.python.org/pep-0257/>
+- PEP 8: <https://peps.python.org/pep-0008/>
+- MDN HTML Comments: <https://developer.mozilla.org/en-US/docs/Web/HTML/Guides/Comments>
+- MDN CSS Comments: <https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Syntax/Comments>
+- CommonMark: <https://spec.commonmark.org/>
+
+## Documentation Definition of Done
+
+A change is not complete until:
+
+- Public Rust APIs have rustdoc comments.
+- Exported TypeScript APIs have JSDoc/TSDoc comments.
+- Public Python APIs have PEP 257 docstrings.
+- Markdown docs reflect changed architecture, security assumptions, workflows, and formats.
+- Examples and tests use fake data and never contain real secrets.
+- Error cases, side effects, and safety assumptions are documented where relevant.
+
+---
+
 # Product Principles
 
 ## Implementation Brainstorming
