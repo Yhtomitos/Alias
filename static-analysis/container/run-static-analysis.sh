@@ -7,6 +7,9 @@ cargo fmt --all --check -- --config-path static-analysis/formatters/rustfmt.toml
 echo "== Rust lint =="
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+echo "== Rust tests =="
+cargo test --workspace --all-features
+
 echo "== Rust dependency policy =="
 cargo deny --config static-analysis/dependency-policy/deny.toml check
 

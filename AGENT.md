@@ -1556,6 +1556,7 @@ Required baseline:
 
 - Rust formatting: `cargo fmt --all --check -- --config-path static-analysis/formatters/rustfmt.toml`
 - Rust linting: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- Rust tests: `cargo test --workspace --all-features`
 - Rust dependency policy: `cargo deny --config static-analysis/dependency-policy/deny.toml check`
 - JS/TS formatting: `npm run format:check`
 - JS/TS linting: `npm run lint`
