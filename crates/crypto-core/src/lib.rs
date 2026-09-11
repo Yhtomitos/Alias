@@ -1,12 +1,12 @@
 //! Cryptographic interfaces and shared wire-format types for encrypted vault
 //! records.
 //!
-//! This crate currently exposes the public contracts used by higher-level vault
-//! code. `PlaceholderCryptoCore` can generate random keys, but record
-//! encryption and decryption deliberately return `CryptoError::NotImplemented`
-//! until the project selects and documents concrete primitives.
+//! This crate exposes the public contracts used by higher-level vault code and
+//! a concrete local authenticated-encryption backend for protected records.
 
-use rand::{RngCore, rngs::OsRng};
+use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, Payload};
+use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
@@ -69,6 +69,9 @@ pub struct EncryptedRecord {
     /// Nonce used for record encryption.
     pub nonce: [u8; NONCE_BYTES],
 
+    /// Nonce used to wrap the per-record data key.
+    pub key_wrapping_nonce: [u8; NONCE_BYTES],
+
     /// Version of the crypto format that produced this record.
     pub crypto_version: u8,
 }
@@ -80,9 +83,13 @@ pub enum CryptoError {
     #[error("invalid key length")]
     InvalidKeyLength,
 
-    /// The operation has not been implemented for the selected crypto backend.
-    #[error("operation is not implemented yet")]
-    NotImplemented,
+    /// The encrypted record was produced by an unsupported crypto format.
+    #[error("unsupported crypto version")]
+    UnsupportedCryptoVersion,
+
+    /// Authentication failed while decrypting ciphertext or unwrapping a key.
+    #[error("authentication failed")]
+    AuthenticationFailed,
 }
 
 /// Common interface for record encryption, decryption, and key generation.
@@ -119,65 +126,248 @@ pub trait CryptoCore {
     ) -> Result<Vec<u8>, CryptoError>;
 }
 
-/// Temporary crypto backend used before record encryption is implemented.
+/// Local crypto backend for encrypted vault records.
 ///
-/// This backend is suitable only for tests that need random key generation. It
-/// must not be used as a production vault encryption provider because
-/// `encrypt_record` and `decrypt_record` always fail.
+/// Version 1 uses XChaCha20-Poly1305 for record encryption and for wrapping the
+/// fresh per-record data key under the vault master key. It authenticates the
+/// crypto version as associated data so version metadata cannot be changed
+/// without causing decryption to fail.
 ///
 /// # Example
 ///
 /// ```
-/// use crypto_core::{CryptoCore, KEY_BYTES, PlaceholderCryptoCore};
+/// use crypto_core::{CryptoCore, KEY_BYTES, LocalCryptoCore};
 ///
-/// let crypto = PlaceholderCryptoCore;
+/// let crypto = LocalCryptoCore;
 /// let key = crypto.generate_random_key();
 ///
 /// assert_eq!(key.expose().len(), KEY_BYTES);
 /// ```
 #[derive(Debug, Default)]
-pub struct PlaceholderCryptoCore;
+pub struct LocalCryptoCore;
 
-impl CryptoCore for PlaceholderCryptoCore {
+impl CryptoCore for LocalCryptoCore {
     fn generate_random_key(&self) -> SecretBytes {
-        let mut bytes = vec![0_u8; KEY_BYTES];
-        OsRng.fill_bytes(&mut bytes);
-        SecretBytes::new(bytes)
+        let key = XChaCha20Poly1305::generate_key(&mut OsRng);
+        SecretBytes::new(key.to_vec())
     }
 
     fn encrypt_record(
         &self,
-        _master_key: &SecretBytes,
-        _plaintext: &[u8],
+        master_key: &SecretBytes,
+        plaintext: &[u8],
     ) -> Result<EncryptedRecord, CryptoError> {
-        Err(CryptoError::NotImplemented)
+        let master_cipher = cipher_from_key(master_key)?;
+        let record_key = self.generate_random_key();
+        let record_cipher = cipher_from_key(&record_key)?;
+
+        let nonce = random_nonce();
+        let key_wrapping_nonce = random_nonce();
+        let aad = aad_for_version(CRYPTO_VERSION_V1);
+
+        let ciphertext = record_cipher
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| CryptoError::AuthenticationFailed)?;
+
+        let wrapped_record_key = master_cipher
+            .encrypt(
+                XNonce::from_slice(&key_wrapping_nonce),
+                Payload {
+                    msg: record_key.expose(),
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| CryptoError::AuthenticationFailed)?;
+
+        Ok(EncryptedRecord {
+            ciphertext,
+            wrapped_record_key,
+            nonce,
+            key_wrapping_nonce,
+            crypto_version: CRYPTO_VERSION_V1,
+        })
     }
 
     fn decrypt_record(
         &self,
-        _master_key: &SecretBytes,
-        _record: &EncryptedRecord,
+        master_key: &SecretBytes,
+        record: &EncryptedRecord,
     ) -> Result<Vec<u8>, CryptoError> {
-        Err(CryptoError::NotImplemented)
+        if record.crypto_version != CRYPTO_VERSION_V1 {
+            return Err(CryptoError::UnsupportedCryptoVersion);
+        }
+
+        let master_cipher = cipher_from_key(master_key)?;
+        let aad = aad_for_version(record.crypto_version);
+
+        let record_key_bytes = master_cipher
+            .decrypt(
+                XNonce::from_slice(&record.key_wrapping_nonce),
+                Payload {
+                    msg: record.wrapped_record_key.as_slice(),
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| CryptoError::AuthenticationFailed)?;
+        let record_key = SecretBytes::new(record_key_bytes);
+        let record_cipher = cipher_from_key(&record_key)?;
+
+        record_cipher
+            .decrypt(
+                XNonce::from_slice(&record.nonce),
+                Payload {
+                    msg: record.ciphertext.as_slice(),
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| CryptoError::AuthenticationFailed)
     }
+}
+
+/// Backward-compatible alias for code that still imports the initial backend
+/// name from early prototypes.
+pub type PlaceholderCryptoCore = LocalCryptoCore;
+
+fn cipher_from_key(key: &SecretBytes) -> Result<XChaCha20Poly1305, CryptoError> {
+    if key.expose().len() != KEY_BYTES {
+        return Err(CryptoError::InvalidKeyLength);
+    }
+
+    Ok(XChaCha20Poly1305::new(Key::from_slice(key.expose())))
+}
+
+fn random_nonce() -> [u8; NONCE_BYTES] {
+    XChaCha20Poly1305::generate_nonce(&mut OsRng).into()
+}
+
+fn aad_for_version(version: u8) -> [u8; 1] {
+    [version]
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CryptoCore, KEY_BYTES, PlaceholderCryptoCore};
+    use super::{
+        CRYPTO_VERSION_V1, CryptoCore, CryptoError, KEY_BYTES, LocalCryptoCore, SecretBytes,
+    };
 
     #[test]
     fn generated_keys_have_expected_size() {
-        let crypto = PlaceholderCryptoCore;
+        let crypto = LocalCryptoCore;
         let key = crypto.generate_random_key();
         assert_eq!(key.expose().len(), KEY_BYTES);
     }
 
     #[test]
     fn generated_keys_are_probabilistically_unique() {
-        let crypto = PlaceholderCryptoCore;
+        let crypto = LocalCryptoCore;
         let key_a = crypto.generate_random_key();
         let key_b = crypto.generate_random_key();
         assert_ne!(key_a.expose(), key_b.expose());
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip_restores_plaintext() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let plaintext = br#"{"service":"GitHub","username":"dev_tim23"}"#;
+
+        let encrypted = crypto
+            .encrypt_record(&master_key, plaintext)
+            .expect("record should encrypt");
+        let decrypted = crypto
+            .decrypt_record(&master_key, &encrypted)
+            .expect("record should decrypt");
+
+        assert_eq!(decrypted, plaintext);
+        assert_ne!(encrypted.ciphertext, plaintext);
+        assert_eq!(encrypted.crypto_version, CRYPTO_VERSION_V1);
+    }
+
+    #[test]
+    fn decrypt_rejects_wrong_master_key() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let wrong_key = crypto.generate_random_key();
+        let encrypted = crypto
+            .encrypt_record(&master_key, b"protected record")
+            .expect("record should encrypt");
+
+        let result = crypto.decrypt_record(&wrong_key, &encrypted);
+
+        assert_eq!(result, Err(CryptoError::AuthenticationFailed));
+    }
+
+    #[test]
+    fn decrypt_rejects_modified_ciphertext() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let mut encrypted = crypto
+            .encrypt_record(&master_key, b"protected record")
+            .expect("record should encrypt");
+        encrypted.ciphertext[0] ^= 0x01;
+
+        let result = crypto.decrypt_record(&master_key, &encrypted);
+
+        assert_eq!(result, Err(CryptoError::AuthenticationFailed));
+    }
+
+    #[test]
+    fn decrypt_rejects_modified_nonce() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let mut encrypted = crypto
+            .encrypt_record(&master_key, b"protected record")
+            .expect("record should encrypt");
+        encrypted.nonce[0] ^= 0x01;
+
+        let result = crypto.decrypt_record(&master_key, &encrypted);
+
+        assert_eq!(result, Err(CryptoError::AuthenticationFailed));
+    }
+
+    #[test]
+    fn decrypt_rejects_corrupted_wrapped_key() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let mut encrypted = crypto
+            .encrypt_record(&master_key, b"protected record")
+            .expect("record should encrypt");
+        encrypted.wrapped_record_key[0] ^= 0x01;
+
+        let result = crypto.decrypt_record(&master_key, &encrypted);
+
+        assert_eq!(result, Err(CryptoError::AuthenticationFailed));
+    }
+
+    #[test]
+    fn decrypt_rejects_unsupported_crypto_version() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let mut encrypted = crypto
+            .encrypt_record(&master_key, b"protected record")
+            .expect("record should encrypt");
+        encrypted.crypto_version = CRYPTO_VERSION_V1 + 1;
+
+        let result = crypto.decrypt_record(&master_key, &encrypted);
+
+        assert_eq!(result, Err(CryptoError::UnsupportedCryptoVersion));
+    }
+
+    #[test]
+    fn encrypt_rejects_invalid_master_key_length() {
+        let crypto = LocalCryptoCore;
+        let mut short_key_bytes = crypto.generate_random_key().expose().to_vec();
+        short_key_bytes.truncate(KEY_BYTES - 1);
+        let short_key = SecretBytes::new(short_key_bytes);
+
+        let result = crypto.encrypt_record(&short_key, b"protected record");
+
+        assert_eq!(result, Err(CryptoError::InvalidKeyLength));
     }
 }
