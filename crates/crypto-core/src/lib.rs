@@ -4,9 +4,9 @@
 //! This crate exposes the public contracts used by higher-level vault code and
 //! a concrete local authenticated-encryption backend for protected records.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
-use rand::{RngCore, rngs::OsRng};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
@@ -148,9 +148,8 @@ pub struct LocalCryptoCore;
 
 impl CryptoCore for LocalCryptoCore {
     fn generate_random_key(&self) -> SecretBytes {
-        let mut bytes = vec![0_u8; KEY_BYTES];
-        OsRng.fill_bytes(&mut bytes);
-        SecretBytes::new(bytes)
+        let key = XChaCha20Poly1305::generate_key(&mut OsRng);
+        SecretBytes::new(key.to_vec())
     }
 
     fn encrypt_record(
@@ -244,9 +243,7 @@ fn cipher_from_key(key: &SecretBytes) -> Result<XChaCha20Poly1305, CryptoError> 
 }
 
 fn random_nonce() -> [u8; NONCE_BYTES] {
-    let mut nonce = [0_u8; NONCE_BYTES];
-    OsRng.fill_bytes(&mut nonce);
-    nonce
+    XChaCha20Poly1305::generate_nonce(&mut OsRng).into()
 }
 
 fn aad_for_version(version: u8) -> [u8; 1] {
@@ -365,7 +362,9 @@ mod tests {
     #[test]
     fn encrypt_rejects_invalid_master_key_length() {
         let crypto = LocalCryptoCore;
-        let short_key = SecretBytes::new(vec![0_u8; KEY_BYTES - 1]);
+        let mut short_key_bytes = crypto.generate_random_key().expose().to_vec();
+        short_key_bytes.truncate(KEY_BYTES - 1);
+        let short_key = SecretBytes::new(short_key_bytes);
 
         let result = crypto.encrypt_record(&short_key, b"protected record");
 
