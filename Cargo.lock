@@ -441,6 +441,7 @@ dependencies = [
 name = "vault-core"
 version = "0.1.0"
 dependencies = [
+ "crypto-core",
  "serde",
  "serde_json",
  "thiserror",

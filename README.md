@@ -6,7 +6,7 @@ A privacy-first digital identity agent that understands how your online accounts
 
 Offline Rust workspace foundation with:
 
-- `crypto-core` (starter crypto interfaces)
-- `vault-core` (vault data model + in-memory vault service skeleton)
+- `crypto-core` (authenticated local record encryption)
+- `vault-core` (vault data model, in-memory service, encrypted local CRUD service)
 - `identity-graph` (personas and account relationship graph)
 - `agent-core` (agent interfaces + username persona heuristic agent)

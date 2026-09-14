@@ -6,6 +6,7 @@
 //! secret fields is redacted, but ordinary identity and metadata fields may
 //! still contain user-sensitive information.
 
+use crypto_core::{CryptoCore, CryptoError, EncryptedRecord, SecretBytes};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -197,6 +198,20 @@ pub enum VaultError {
     /// The vault is already locked.
     #[error("vault is already locked")]
     AlreadyLocked,
+
+    /// A record could not be serialized before encryption or parsed after decryption.
+    #[error("record serialization failed")]
+    SerializationFailed,
+
+    /// Encryption, decryption, key wrapping, or authentication failed.
+    #[error("cryptographic operation failed")]
+    CryptoOperationFailed,
+}
+
+impl From<CryptoError> for VaultError {
+    fn from(_error: CryptoError) -> Self {
+        Self::CryptoOperationFailed
+    }
 }
 
 /// Interface for local vault record storage.
@@ -251,6 +266,91 @@ pub trait VaultService {
 pub struct InMemoryVaultService {
     records: HashMap<Uuid, VaultRecord>,
     locked: bool,
+}
+
+/// Local vault service that keeps its durable record store encrypted.
+///
+/// Records are serialized as JSON and encrypted through `crypto-core` before
+/// they enter the backing map. While unlocked, the service keeps a plaintext
+/// cache so callers can use ordinary CRUD operations. Locking clears that cache
+/// and gates all plaintext access; unlocking decrypts every stored record with
+/// the configured master key. This prototype keeps the master key in process
+/// memory until OS secure storage integration exists.
+#[derive(Debug)]
+pub struct LocalEncryptedVaultService<C> {
+    crypto: C,
+    master_key: SecretBytes,
+    encrypted_records: HashMap<Uuid, EncryptedRecord>,
+    unlocked_records: Option<HashMap<Uuid, VaultRecord>>,
+}
+
+impl<C> LocalEncryptedVaultService<C>
+where
+    C: CryptoCore,
+{
+    /// Creates a locked encrypted vault service using the provided crypto
+    /// backend and master key.
+    ///
+    /// The service starts with an empty encrypted store. Call `unlock` before
+    /// creating, reading, updating, or deleting plaintext records.
+    pub fn new(crypto: C, master_key: SecretBytes) -> Self {
+        Self {
+            crypto,
+            master_key,
+            encrypted_records: HashMap::new(),
+            unlocked_records: None,
+        }
+    }
+
+    /// Creates a locked encrypted vault service from an existing encrypted
+    /// record store.
+    ///
+    /// The provided records are not decrypted until `unlock` is called. This is
+    /// the handoff point for future file, database, or sync adapters that load
+    /// encrypted records from disk or another opaque storage backend.
+    pub fn from_encrypted_records(
+        crypto: C,
+        master_key: SecretBytes,
+        encrypted_records: HashMap<Uuid, EncryptedRecord>,
+    ) -> Self {
+        Self {
+            crypto,
+            master_key,
+            encrypted_records,
+            unlocked_records: None,
+        }
+    }
+
+    /// Returns the encrypted records currently held by the local backing store.
+    ///
+    /// This exposes ciphertext and metadata only. It is intended for persistence
+    /// adapters, sync adapters, and tests that need to verify that plaintext
+    /// records are not stored outside the unlocked cache.
+    pub fn encrypted_records(&self) -> &HashMap<Uuid, EncryptedRecord> {
+        &self.encrypted_records
+    }
+
+    fn ensure_unlocked_records(&self) -> Result<&HashMap<Uuid, VaultRecord>, VaultError> {
+        self.unlocked_records.as_ref().ok_or(VaultError::Locked)
+    }
+
+    fn ensure_unlocked_records_mut(
+        &mut self,
+    ) -> Result<&mut HashMap<Uuid, VaultRecord>, VaultError> {
+        self.unlocked_records.as_mut().ok_or(VaultError::Locked)
+    }
+
+    fn encrypt_for_storage(&self, record: &VaultRecord) -> Result<EncryptedRecord, VaultError> {
+        let plaintext = serde_json::to_vec(record).map_err(|_| VaultError::SerializationFailed)?;
+        self.crypto
+            .encrypt_record(&self.master_key, &plaintext)
+            .map_err(VaultError::from)
+    }
+
+    fn decrypt_from_storage(&self, record: &EncryptedRecord) -> Result<VaultRecord, VaultError> {
+        let plaintext = self.crypto.decrypt_record(&self.master_key, record)?;
+        serde_json::from_slice(&plaintext).map_err(|_| VaultError::SerializationFailed)
+    }
 }
 
 impl InMemoryVaultService {
@@ -341,9 +441,94 @@ impl VaultService for InMemoryVaultService {
     }
 }
 
+impl<C> VaultService for LocalEncryptedVaultService<C>
+where
+    C: CryptoCore,
+{
+    fn create_record(&mut self, record: VaultRecord) -> Result<(), VaultError> {
+        let records = self.ensure_unlocked_records()?;
+        if records.contains_key(&record.id) {
+            return Err(VaultError::RecordAlreadyExists);
+        }
+
+        let encrypted = self.encrypt_for_storage(&record)?;
+        self.encrypted_records.insert(record.id, encrypted);
+        self.ensure_unlocked_records_mut()?
+            .insert(record.id, record);
+        Ok(())
+    }
+
+    fn get_record(&self, id: Uuid) -> Result<VaultRecord, VaultError> {
+        self.ensure_unlocked_records()?
+            .get(&id)
+            .cloned()
+            .ok_or(VaultError::RecordNotFound)
+    }
+
+    fn list_records(&self) -> Result<Vec<VaultRecord>, VaultError> {
+        Ok(self.ensure_unlocked_records()?.values().cloned().collect())
+    }
+
+    fn update_record(&mut self, record: VaultRecord) -> Result<(), VaultError> {
+        let records = self.ensure_unlocked_records()?;
+        if !records.contains_key(&record.id) {
+            return Err(VaultError::RecordNotFound);
+        }
+
+        let encrypted = self.encrypt_for_storage(&record)?;
+        self.encrypted_records.insert(record.id, encrypted);
+        self.ensure_unlocked_records_mut()?
+            .insert(record.id, record);
+        Ok(())
+    }
+
+    fn delete_record(&mut self, id: Uuid) -> Result<(), VaultError> {
+        let records = self.ensure_unlocked_records()?;
+        if !records.contains_key(&id) {
+            return Err(VaultError::RecordNotFound);
+        }
+
+        self.encrypted_records.remove(&id);
+        self.ensure_unlocked_records_mut()?.remove(&id);
+        Ok(())
+    }
+
+    fn lock(&mut self) -> Result<(), VaultError> {
+        if self.unlocked_records.is_none() {
+            return Err(VaultError::AlreadyLocked);
+        }
+
+        self.unlocked_records = None;
+        Ok(())
+    }
+
+    fn unlock(&mut self) -> Result<(), VaultError> {
+        if self.unlocked_records.is_some() {
+            return Err(VaultError::AlreadyUnlocked);
+        }
+
+        let mut records = HashMap::new();
+        for (id, encrypted) in &self.encrypted_records {
+            let record = self.decrypt_from_storage(encrypted)?;
+            if record.id != *id {
+                return Err(VaultError::SerializationFailed);
+            }
+            records.insert(*id, record);
+        }
+
+        self.unlocked_records = Some(records);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{InMemoryVaultService, SecretString, VaultRecord, VaultService};
+    use super::{
+        InMemoryVaultService, LocalEncryptedVaultService, SecretString, VaultError, VaultRecord,
+        VaultService,
+    };
+    use crypto_core::{CryptoCore, LocalCryptoCore};
+    use uuid::Uuid;
 
     #[test]
     fn secret_debug_is_redacted() {
@@ -379,5 +564,148 @@ mod tests {
 
         service.lock().expect("vault should lock");
         assert!(service.list_records().is_err());
+    }
+
+    #[test]
+    fn local_encrypted_vault_crud_persists_ciphertext_only() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let mut service = LocalEncryptedVaultService::new(crypto, master_key);
+        service.unlock().expect("vault should unlock");
+
+        let mut record = VaultRecord::new("GitHub");
+        record.identity.username = Some("dev_tim23".to_string());
+        record.credentials.password = Some(SecretString::new("fake-password"));
+        let id = record.id;
+
+        service
+            .create_record(record)
+            .expect("record should be created");
+
+        let stored_json =
+            serde_json::to_string(service.encrypted_records()).expect("store should serialize");
+        assert!(!stored_json.contains("GitHub"));
+        assert!(!stored_json.contains("dev_tim23"));
+        assert!(!stored_json.contains("fake-password"));
+
+        let mut updated = service.get_record(id).expect("record should be readable");
+        updated.metadata.favorite = true;
+        service
+            .update_record(updated)
+            .expect("record should be updated");
+        assert!(
+            service
+                .get_record(id)
+                .expect("record should exist")
+                .metadata
+                .favorite
+        );
+
+        service
+            .delete_record(id)
+            .expect("record should be deleted from both stores");
+        assert_eq!(service.list_records().expect("vault is unlocked").len(), 0);
+        assert!(!service.encrypted_records().contains_key(&id));
+    }
+
+    #[test]
+    fn local_encrypted_vault_lock_unlock_restores_records() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let mut service = LocalEncryptedVaultService::new(crypto, master_key);
+        service.unlock().expect("vault should unlock");
+
+        let record = VaultRecord::new("Discord");
+        let id = record.id;
+        service
+            .create_record(record)
+            .expect("record should be stored encrypted");
+
+        service.lock().expect("vault should lock");
+        assert_eq!(service.get_record(id), Err(VaultError::Locked));
+
+        service
+            .unlock()
+            .expect("vault should decrypt stored records");
+        assert_eq!(
+            service
+                .get_record(id)
+                .expect("record should decrypt after unlock")
+                .identity
+                .service,
+            "Discord"
+        );
+    }
+
+    #[test]
+    fn local_encrypted_vault_can_start_from_existing_encrypted_records() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let mut service = LocalEncryptedVaultService::new(crypto, master_key.clone());
+        service.unlock().expect("vault should unlock");
+
+        let record = VaultRecord::new("Notion");
+        let id = record.id;
+        service
+            .create_record(record)
+            .expect("record should be stored encrypted");
+        let encrypted_records = service.encrypted_records().clone();
+
+        let mut restored = LocalEncryptedVaultService::from_encrypted_records(
+            LocalCryptoCore,
+            master_key,
+            encrypted_records,
+        );
+        restored.unlock().expect("records should decrypt");
+
+        assert_eq!(
+            restored
+                .get_record(id)
+                .expect("record should exist")
+                .identity
+                .service,
+            "Notion"
+        );
+    }
+
+    #[test]
+    fn local_encrypted_vault_rejects_tampered_ciphertext_on_unlock() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let mut service = LocalEncryptedVaultService::new(crypto, master_key);
+        service.unlock().expect("vault should unlock");
+
+        let record = VaultRecord::new("Example");
+        let id = record.id;
+        service
+            .create_record(record)
+            .expect("record should be stored encrypted");
+        service.lock().expect("vault should lock");
+
+        service
+            .encrypted_records
+            .get_mut(&id)
+            .expect("encrypted record should exist")
+            .ciphertext[0] ^= 0x01;
+
+        assert_eq!(service.unlock(), Err(VaultError::CryptoOperationFailed));
+    }
+
+    #[test]
+    fn local_encrypted_vault_reports_missing_records() {
+        let crypto = LocalCryptoCore;
+        let master_key = crypto.generate_random_key();
+        let mut service = LocalEncryptedVaultService::new(crypto, master_key);
+        service.unlock().expect("vault should unlock");
+
+        let missing_id = Uuid::new_v4();
+        assert_eq!(
+            service.delete_record(missing_id),
+            Err(VaultError::RecordNotFound)
+        );
+        assert_eq!(
+            service.update_record(VaultRecord::new("Missing")),
+            Err(VaultError::RecordNotFound)
+        );
     }
 }
