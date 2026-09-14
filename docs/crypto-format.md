@@ -1,39 +1,22 @@
 # Crypto Format
 
-The initial local vault format uses client-side envelope encryption. Each
-`VaultRecord` is serialized as JSON and encrypted before it enters the local
-encrypted record store.
+Alias uses client-side envelope encryption for vault records. Sensitive fields
+must be serialized into the plaintext record payload locally before encryption;
+cloud storage and synchronization should only receive `EncryptedRecord` values.
 
 ## Version 1
 
-Version 1 uses:
+Version 1 uses XChaCha20-Poly1305 authenticated encryption from RustCrypto.
 
-- XChaCha20-Poly1305 for authenticated record encryption.
-- A fresh random 32-byte data key for each record.
-- XChaCha20-Poly1305 to wrap each record data key with the vault master key.
-- A 24-byte record encryption nonce.
-- A separate 24-byte key-wrapping nonce.
-- The one-byte crypto version as associated data for both encryption steps.
+- `ciphertext`: encrypted plaintext record payload.
+- `wrapped_record_key`: fresh per-record data key encrypted under the vault
+  master key.
+- `nonce`: 24-byte XChaCha20-Poly1305 nonce for the record payload.
+- `key_wrapping_nonce`: 24-byte XChaCha20-Poly1305 nonce for record-key
+  wrapping.
+- `crypto_version`: `1`.
 
-The serialized encrypted record contains only:
-
-- ciphertext
-- wrapped record key
-- record nonce
-- key-wrapping nonce
-- crypto version
-
-Plaintext service names, usernames, emails, passwords, notes, custom secret
-fields, and relationship metadata are part of the protected payload and must not
-be stored beside the encrypted record.
-
-## Security Assumptions
-
-Callers must provide a 32-byte master vault key generated from cryptographically
-secure randomness or a future documented key-derivation workflow. The current
-prototype keeps the master key in process memory while the encrypted vault
-service exists; OS secure storage and key derivation are still future work.
-
-Decryption fails when ciphertext, nonces, wrapped keys, or crypto version
-metadata are modified. Unsupported crypto versions are rejected rather than
-silently downgraded.
+The crypto version is authenticated as associated data for both the payload
+ciphertext and wrapped record key. Decryption must fail when authentication
+fails, when the master key length is invalid, or when the crypto version is not
+supported.
