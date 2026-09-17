@@ -1825,6 +1825,20 @@ the user's entire digital identity.
 
 ---
 
+# Branching Workflow
+
+Before changing files, inspect the current branch and working tree. Preserve all
+existing user changes and do not reset, overwrite, or move them without explicit
+approval.
+
+Each roadmap step or independently reviewable implementation slice must be
+developed on its own clearly named feature branch. Documentation-only process
+changes must use a separate documentation branch and must not be bundled into a
+feature branch. Branch from the latest appropriate integration point for the
+work, and keep unrelated changes out of the branch.
+
+---
+
 # Immediate Next Steps
 
 Work in this order:
