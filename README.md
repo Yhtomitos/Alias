@@ -9,4 +9,8 @@ Offline Rust workspace foundation with:
 - `crypto-core` (authenticated local record encryption)
 - `vault-core` (vault data model, in-memory service, encrypted local CRUD service)
 - `identity-graph` (personas, email/username identities, dependency queries)
-- `agent-core` (agent interfaces + username persona heuristic agent)
+- `agent-core` (explainable username similarity heuristic + agent interfaces)
+
+The username heuristic exposes bounded component scores for local analysis; see
+[`docs/username-similarity.md`](docs/username-similarity.md) for its behavior
+and limitations.

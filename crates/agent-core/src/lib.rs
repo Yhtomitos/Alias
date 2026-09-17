@@ -191,6 +191,30 @@ pub enum AgentError {
     PermissionDenied,
 }
 
+/// Explainable component scores for a pair of usernames.
+///
+/// Every score is in the inclusive range `0.0..=1.0`. The assessment contains
+/// no copies of the input usernames, which lets callers retain only the result
+/// without duplicating identity data. A score is evidence of textual
+/// similarity, not proof that two accounts belong to the same person.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct UsernameSimilarity {
+    /// Normalized Levenshtein similarity.
+    pub normalized_edit: f32,
+
+    /// Jaro-Winkler similarity after normalization.
+    pub jaro_winkler: f32,
+
+    /// Jaccard similarity over normalized character bigrams.
+    pub bigram: f32,
+
+    /// Agreement between trailing numeric suffixes.
+    pub numeric_suffix: f32,
+
+    /// Weighted aggregate used by the initial username heuristic.
+    pub score: f32,
+}
+
 /// Normalizes a username for similarity checks.
 ///
 /// Normalization trims surrounding whitespace, lowercases, removes whitespace,
@@ -222,7 +246,7 @@ pub fn normalized_edit_similarity(lhs: &str, rhs: &str) -> f32 {
     }
 
     let distance = strsim::levenshtein(&lhs, &rhs) as f32;
-    let longest = lhs.len().max(rhs.len()) as f32;
+    let longest = lhs.chars().count().max(rhs.chars().count()) as f32;
     1.0 - (distance / longest)
 }
 
@@ -299,11 +323,61 @@ fn numeric_suffix(value: &str) -> Option<&str> {
     Some(&value[split_at..])
 }
 
+/// Computes an explainable username similarity assessment.
+///
+/// Inputs are normalized locally and are not retained in the returned value.
+/// If either normalized username is empty, every component score is `0.0`.
+/// The aggregate is a weighted blend of normalized edit similarity (35%),
+/// Jaro-Winkler similarity (35%), bigram Jaccard similarity (20%), and numeric
+/// suffix agreement (10%).
+///
+/// This heuristic does not account for Unicode confusables, transliteration,
+/// language-specific rules, or whether two accounts are actually controlled by
+/// the same person.
+///
+/// # Example
+///
+/// ```
+/// use agent_core::username_similarity;
+///
+/// let assessment = username_similarity("dev_tim23", "devtim23");
+/// assert!(assessment.score > 0.9);
+/// assert_eq!(assessment.numeric_suffix, 1.0);
+/// ```
+pub fn username_similarity(lhs: &str, rhs: &str) -> UsernameSimilarity {
+    if normalize_username(lhs).is_empty() || normalize_username(rhs).is_empty() {
+        return UsernameSimilarity {
+            normalized_edit: 0.0,
+            jaro_winkler: 0.0,
+            bigram: 0.0,
+            numeric_suffix: 0.0,
+            score: 0.0,
+        };
+    }
+
+    let normalized_edit = normalized_edit_similarity(lhs, rhs);
+    let jaro_winkler = jaro_winkler_similarity(lhs, rhs);
+    let bigram = ngram_similarity(lhs, rhs, 2);
+    let numeric_suffix = numeric_suffix_similarity(lhs, rhs);
+    let score = (normalized_edit * 0.35)
+        + (jaro_winkler * 0.35)
+        + (bigram * 0.20)
+        + (numeric_suffix * 0.10);
+
+    UsernameSimilarity {
+        normalized_edit,
+        jaro_winkler,
+        bigram,
+        numeric_suffix,
+        score: score.clamp(0.0, 1.0),
+    }
+}
+
 /// Combines username similarity signals into a single heuristic score.
 ///
-/// The score is a weighted blend of normalized edit similarity, Jaro-Winkler
-/// similarity, bigram Jaccard similarity, and numeric suffix agreement. It is a
-/// heuristic for local recommendations, not an identity proof.
+/// This convenience API returns the aggregate from `username_similarity`. It is
+/// a heuristic for local recommendations, not an identity proof. Empty or
+/// separator-only inputs score `0.0`.
 ///
 /// # Example
 ///
@@ -314,12 +388,7 @@ fn numeric_suffix(value: &str) -> Option<&str> {
 /// assert!(score > 0.9);
 /// ```
 pub fn combined_username_score(lhs: &str, rhs: &str) -> f32 {
-    let edit = normalized_edit_similarity(lhs, rhs);
-    let jaro = jaro_winkler_similarity(lhs, rhs);
-    let ngram = ngram_similarity(lhs, rhs, 2);
-    let numeric = numeric_suffix_similarity(lhs, rhs);
-
-    (edit * 0.35) + (jaro * 0.35) + (ngram * 0.20) + (numeric * 0.10)
+    username_similarity(lhs, rhs).score
 }
 
 /// Agent that recommends persona review for accounts with similar usernames.
@@ -403,14 +472,15 @@ impl Agent for UsernamePersonaAgent {
                     continue;
                 };
 
-                let score = combined_username_score(lhs_username, rhs_username);
+                let similarity = username_similarity(lhs_username, rhs_username);
+                let score = similarity.score;
                 if score < self.threshold {
                     continue;
                 }
 
                 let normalized_match =
                     normalize_username(lhs_username) == normalize_username(rhs_username);
-                let matching_suffix = numeric_suffix_similarity(lhs_username, rhs_username) == 1.0;
+                let matching_suffix = similarity.numeric_suffix == 1.0;
 
                 let mut reasons = vec![format!(
                     "combined username similarity score is {:.0}%",
@@ -456,7 +526,8 @@ impl Agent for UsernamePersonaAgent {
 mod tests {
     use super::{
         AccountView, Agent, AgentContext, AgentError, AgentPermissions, UsernamePersonaAgent,
-        combined_username_score, normalize_username,
+        combined_username_score, normalize_username, normalized_edit_similarity,
+        username_similarity,
     };
     use uuid::Uuid;
 
@@ -471,6 +542,38 @@ mod tests {
     fn combined_similarity_is_high_for_minor_variants() {
         let score = combined_username_score("dev_tim23", "devtim23");
         assert!(score >= 0.9);
+    }
+
+    #[test]
+    fn similarity_assessment_exposes_component_scores() {
+        let assessment = username_similarity("dev_tim23", "devtim23");
+
+        assert_eq!(assessment.normalized_edit, 1.0);
+        assert_eq!(assessment.jaro_winkler, 1.0);
+        assert_eq!(assessment.bigram, 1.0);
+        assert_eq!(assessment.numeric_suffix, 1.0);
+        assert_eq!(assessment.score, 1.0);
+    }
+
+    #[test]
+    fn empty_and_separator_only_usernames_score_zero() {
+        assert_eq!(username_similarity("", "").score, 0.0);
+        assert_eq!(username_similarity("_-.", "name").score, 0.0);
+    }
+
+    #[test]
+    fn edit_similarity_counts_unicode_characters() {
+        assert_eq!(normalized_edit_similarity("é", "a"), 0.0);
+        assert_eq!(normalized_edit_similarity("éx", "éy"), 0.5);
+    }
+
+    #[test]
+    fn similarity_is_symmetric_and_bounded() {
+        let forward = username_similarity("alpha_42", "alfa42");
+        let reverse = username_similarity("alfa42", "alpha_42");
+
+        assert_eq!(forward, reverse);
+        assert!((0.0..=1.0).contains(&forward.score));
     }
 
     #[test]
