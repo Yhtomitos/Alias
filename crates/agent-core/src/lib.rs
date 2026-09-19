@@ -123,6 +123,39 @@ pub struct AgentContext {
     pub accounts: Vec<AccountView>,
 }
 
+impl AgentContext {
+    fn scoped_to(&self, permissions: &AgentPermissions) -> Self {
+        Self {
+            permissions: permissions.clone(),
+            accounts: self
+                .accounts
+                .iter()
+                .map(|account| AccountView {
+                    record_id: account.record_id,
+                    service: if permissions.service {
+                        account.service.clone()
+                    } else {
+                        String::new()
+                    },
+                    username: permissions
+                        .username
+                        .then(|| account.username.clone())
+                        .flatten(),
+                    persona: permissions
+                        .persona
+                        .then(|| account.persona.clone())
+                        .flatten(),
+                    tags: if permissions.tags {
+                        account.tags.clone()
+                    } else {
+                        Vec::new()
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
 /// User-reviewable result produced by an agent.
 ///
 /// Recommendations are advisory. Any action that changes vault state,
@@ -183,12 +216,169 @@ pub enum RecommendedAction {
     NoAction,
 }
 
+impl RecommendedAction {
+    fn requires_approval(&self) -> bool {
+        match self {
+            Self::AssignPersona
+            | Self::MergeRecords
+            | Self::AddRecoveryMethod
+            | Self::EnableMfa => true,
+            Self::ReviewIdentityLinkability | Self::ReviewAccount | Self::NoAction => false,
+        }
+    }
+}
+
 /// Errors returned by agent analysis.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AgentError {
     /// The supplied context does not grant all permissions required by the agent.
     #[error("agent does not have required permissions")]
     PermissionDenied,
+}
+
+/// Policy decision attached to a validated agent recommendation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PolicyDecision {
+    /// The recommendation is informational and may be shown without approval.
+    Allow,
+
+    /// Applying the recommendation could change user data or security settings.
+    RequireApproval,
+}
+
+/// Recommendation validated and classified by the policy engine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicyEvaluation {
+    /// Validated recommendation returned by the agent.
+    pub recommendation: Recommendation,
+
+    /// Independently computed handling decision.
+    pub decision: PolicyDecision,
+}
+
+/// Errors raised while enforcing agent policy.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum PolicyError {
+    /// Either the policy or source context does not grant required fields.
+    #[error("agent '{agent_id}' is not permitted to access its required fields")]
+    PermissionDenied {
+        /// Stable ID of the denied agent.
+        agent_id: String,
+    },
+
+    /// The agent rejected the policy-scoped context.
+    #[error("agent analysis failed: {0}")]
+    Agent(#[from] AgentError),
+
+    /// A recommendation claimed a different producing agent.
+    #[error("recommendation '{recommendation_id}' has an invalid agent ID")]
+    AgentIdentityMismatch {
+        /// ID of the invalid recommendation.
+        recommendation_id: String,
+    },
+
+    /// A recommendation confidence was non-finite or outside `0.0..=1.0`.
+    #[error("recommendation '{recommendation_id}' has invalid confidence")]
+    InvalidConfidence {
+        /// ID of the invalid recommendation.
+        recommendation_id: String,
+    },
+
+    /// A recommendation did not provide explainable evidence.
+    #[error("recommendation '{recommendation_id}' has no reasons")]
+    MissingReasons {
+        /// ID of the invalid recommendation.
+        recommendation_id: String,
+    },
+}
+
+/// Enforces field access and approval policy around local agent execution.
+///
+/// The engine checks both its configured maximum grant and the permissions on
+/// the source context. It then creates a context containing only fields the
+/// agent declared as required. Returned recommendations are validated before
+/// they can enter a recommendation queue or user interface.
+#[derive(Debug, Clone)]
+pub struct PolicyEngine {
+    granted_permissions: AgentPermissions,
+}
+
+impl PolicyEngine {
+    /// Creates an engine with the maximum fields agents may access.
+    pub fn new(granted_permissions: AgentPermissions) -> Self {
+        Self {
+            granted_permissions,
+        }
+    }
+
+    /// Runs an agent against a least-privilege projection of `context`.
+    ///
+    /// Returns `PolicyError::PermissionDenied` without invoking the agent when
+    /// either the engine policy or source context lacks a required field.
+    /// Recommendations with invalid identity, confidence, or explainability
+    /// metadata are rejected. State-changing actions always require approval,
+    /// regardless of the recommendation's own confirmation flag.
+    pub fn run(
+        &self,
+        agent: &dyn Agent,
+        context: &AgentContext,
+    ) -> Result<Vec<PolicyEvaluation>, PolicyError> {
+        let required = agent.required_permissions();
+        if !self.granted_permissions.allows(&required) || !context.permissions.allows(&required) {
+            return Err(PolicyError::PermissionDenied {
+                agent_id: agent.id().to_string(),
+            });
+        }
+
+        let scoped_context = context.scoped_to(&required);
+        agent
+            .analyze(&scoped_context)?
+            .into_iter()
+            .map(|recommendation| self.evaluate(agent.id(), recommendation))
+            .collect()
+    }
+
+    fn evaluate(
+        &self,
+        agent_id: &str,
+        mut recommendation: Recommendation,
+    ) -> Result<PolicyEvaluation, PolicyError> {
+        if recommendation.agent_id != agent_id {
+            return Err(PolicyError::AgentIdentityMismatch {
+                recommendation_id: recommendation.id,
+            });
+        }
+        if !recommendation.confidence.is_finite()
+            || !(0.0..=1.0).contains(&recommendation.confidence)
+        {
+            return Err(PolicyError::InvalidConfidence {
+                recommendation_id: recommendation.id,
+            });
+        }
+        if recommendation.reasons.is_empty()
+            || recommendation
+                .reasons
+                .iter()
+                .all(|reason| reason.trim().is_empty())
+        {
+            return Err(PolicyError::MissingReasons {
+                recommendation_id: recommendation.id,
+            });
+        }
+
+        let decision =
+            if recommendation.requires_confirmation || recommendation.action.requires_approval() {
+                PolicyDecision::RequireApproval
+            } else {
+                PolicyDecision::Allow
+            };
+        recommendation.requires_confirmation = decision == PolicyDecision::RequireApproval;
+
+        Ok(PolicyEvaluation {
+            recommendation,
+            decision,
+        })
+    }
 }
 
 /// Explainable component scores for a pair of usernames.
@@ -525,11 +715,110 @@ impl Agent for UsernamePersonaAgent {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountView, Agent, AgentContext, AgentError, AgentPermissions, UsernamePersonaAgent,
+        AccountView, Agent, AgentContext, AgentError, AgentPermissions, PolicyDecision,
+        PolicyEngine, PolicyError, Recommendation, RecommendedAction, UsernamePersonaAgent,
         combined_username_score, normalize_username, normalized_edit_similarity,
         username_similarity,
     };
     use uuid::Uuid;
+
+    struct DeniedAgent;
+
+    impl Agent for DeniedAgent {
+        fn id(&self) -> &'static str {
+            "denied"
+        }
+
+        fn required_permissions(&self) -> AgentPermissions {
+            AgentPermissions {
+                username: true,
+                ..AgentPermissions::default()
+            }
+        }
+
+        fn analyze(&self, _context: &AgentContext) -> Result<Vec<Recommendation>, AgentError> {
+            panic!("denied agents must not be invoked")
+        }
+    }
+
+    struct ServiceOnlyAgent;
+
+    impl Agent for ServiceOnlyAgent {
+        fn id(&self) -> &'static str {
+            "service_only"
+        }
+
+        fn required_permissions(&self) -> AgentPermissions {
+            AgentPermissions {
+                service: true,
+                ..AgentPermissions::default()
+            }
+        }
+
+        fn analyze(&self, context: &AgentContext) -> Result<Vec<Recommendation>, AgentError> {
+            assert!(context.permissions.service);
+            assert!(!context.permissions.username);
+            assert_eq!(context.accounts[0].service, "Example");
+            assert_eq!(context.accounts[0].username, None);
+            assert_eq!(context.accounts[0].persona, None);
+            assert!(context.accounts[0].tags.is_empty());
+
+            Ok(vec![test_recommendation(
+                self.id(),
+                RecommendedAction::NoAction,
+                false,
+            )])
+        }
+    }
+
+    struct StaticRecommendationAgent {
+        recommendation: Recommendation,
+    }
+
+    impl Agent for StaticRecommendationAgent {
+        fn id(&self) -> &'static str {
+            "static"
+        }
+
+        fn required_permissions(&self) -> AgentPermissions {
+            AgentPermissions::default()
+        }
+
+        fn analyze(&self, _context: &AgentContext) -> Result<Vec<Recommendation>, AgentError> {
+            Ok(vec![self.recommendation.clone()])
+        }
+    }
+
+    fn test_recommendation(
+        agent_id: &str,
+        action: RecommendedAction,
+        requires_confirmation: bool,
+    ) -> Recommendation {
+        Recommendation {
+            id: "recommendation-1".to_string(),
+            agent_id: agent_id.to_string(),
+            title: "Review account".to_string(),
+            description: "Review the suggested account change".to_string(),
+            confidence: 0.9,
+            reasons: vec!["test evidence".to_string()],
+            affected_record_ids: vec![Uuid::new_v4()],
+            action,
+            requires_confirmation,
+        }
+    }
+
+    fn account_context(permissions: AgentPermissions) -> AgentContext {
+        AgentContext {
+            permissions,
+            accounts: vec![AccountView {
+                record_id: Uuid::new_v4(),
+                service: "Example".to_string(),
+                username: Some("private_handle".to_string()),
+                persona: Some("Private".to_string()),
+                tags: vec!["sensitive".to_string()],
+            }],
+        }
+    }
 
     #[test]
     fn username_normalization_removes_separators() {
@@ -574,6 +863,131 @@ mod tests {
 
         assert_eq!(forward, reverse);
         assert!((0.0..=1.0).contains(&forward.score));
+    }
+
+    #[test]
+    fn policy_denies_missing_permissions_before_agent_execution() {
+        let engine = PolicyEngine::new(AgentPermissions::default());
+        let context = account_context(AgentPermissions::username_persona_defaults());
+
+        assert_eq!(
+            engine.run(&DeniedAgent, &context),
+            Err(PolicyError::PermissionDenied {
+                agent_id: "denied".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn policy_scopes_context_to_declared_permissions() {
+        let available = AgentPermissions {
+            service: true,
+            username: true,
+            persona: true,
+            tags: true,
+            ..AgentPermissions::default()
+        };
+        let engine = PolicyEngine::new(available.clone());
+        let context = account_context(available);
+
+        let evaluations = engine
+            .run(&ServiceOnlyAgent, &context)
+            .expect("service-only analysis should be permitted");
+
+        assert_eq!(evaluations[0].decision, PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn policy_requires_approval_for_state_changes_even_when_agent_does_not() {
+        let recommendation = test_recommendation("static", RecommendedAction::AssignPersona, false);
+        let agent = StaticRecommendationAgent { recommendation };
+        let engine = PolicyEngine::new(AgentPermissions::default());
+
+        let evaluations = engine
+            .run(&agent, &AgentContext::default())
+            .expect("valid recommendation should pass policy");
+
+        assert_eq!(evaluations[0].decision, PolicyDecision::RequireApproval);
+        assert!(evaluations[0].recommendation.requires_confirmation);
+    }
+
+    #[test]
+    fn policy_preserves_stricter_agent_confirmation_request() {
+        let recommendation = test_recommendation("static", RecommendedAction::NoAction, true);
+        let agent = StaticRecommendationAgent { recommendation };
+        let engine = PolicyEngine::new(AgentPermissions::default());
+
+        let evaluations = engine
+            .run(&agent, &AgentContext::default())
+            .expect("valid recommendation should pass policy");
+
+        assert_eq!(evaluations[0].decision, PolicyDecision::RequireApproval);
+    }
+
+    #[test]
+    fn policy_rejects_invalid_recommendation_metadata() {
+        let mut recommendation = test_recommendation("static", RecommendedAction::NoAction, false);
+        recommendation.confidence = f32::NAN;
+        let agent = StaticRecommendationAgent { recommendation };
+        let engine = PolicyEngine::new(AgentPermissions::default());
+
+        assert_eq!(
+            engine.run(&agent, &AgentContext::default()),
+            Err(PolicyError::InvalidConfidence {
+                recommendation_id: "recommendation-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn policy_rejects_blank_explanations() {
+        let mut recommendation = test_recommendation("static", RecommendedAction::NoAction, false);
+        recommendation.reasons = vec!["   ".to_string()];
+        let agent = StaticRecommendationAgent { recommendation };
+        let engine = PolicyEngine::new(AgentPermissions::default());
+
+        assert_eq!(
+            engine.run(&agent, &AgentContext::default()),
+            Err(PolicyError::MissingReasons {
+                recommendation_id: "recommendation-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn username_persona_agent_runs_through_policy_boundary() {
+        let permissions = AgentPermissions::username_persona_defaults();
+        let engine = PolicyEngine::new(permissions.clone());
+        let context = AgentContext {
+            permissions,
+            accounts: vec![
+                AccountView {
+                    record_id: Uuid::new_v4(),
+                    service: "GitHub".to_string(),
+                    username: Some("dev_tim23".to_string()),
+                    persona: None,
+                    tags: vec![],
+                },
+                AccountView {
+                    record_id: Uuid::new_v4(),
+                    service: "Reddit".to_string(),
+                    username: Some("devtim23".to_string()),
+                    persona: None,
+                    tags: vec![],
+                },
+            ],
+        };
+
+        let evaluations = engine
+            .run(&UsernamePersonaAgent::default(), &context)
+            .expect("username persona analysis should pass policy");
+
+        assert_eq!(evaluations.len(), 1);
+        assert_eq!(evaluations[0].decision, PolicyDecision::RequireApproval);
+        assert_eq!(
+            evaluations[0].recommendation.action,
+            RecommendedAction::AssignPersona
+        );
     }
 
     #[test]

@@ -22,3 +22,16 @@ username identities, and directed account relationships. Account records stay in
 `vault-core`; the graph uses opaque account UUIDs so graph queries can reason
 about identity boundaries, recovery dependencies, SSO dependencies, and
 critical accounts without accessing credential fields.
+
+## Local Agent Policy
+
+`agent-core` defines local analysis agents and a `PolicyEngine` boundary. The
+engine checks an agent's declared field permissions against both configured
+policy and available context, redacts undeclared fields before invocation, and
+validates each recommendation returned by the agent.
+
+Policy decisions separate informational recommendations from changes requiring
+user approval. Persona assignment, record merging, recovery-method changes, and
+MFA changes always require approval even if an agent incorrectly marks them as
+safe. The policy engine does not execute actions; downstream command boundaries
+must independently authorize side effects.
