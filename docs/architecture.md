@@ -35,3 +35,12 @@ user approval. Persona assignment, record merging, recovery-method changes, and
 MFA changes always require approval even if an agent incorrectly marks them as
 safe. The policy engine does not execute actions; downstream command boundaries
 must independently authorize side effects.
+
+## Local Username Model
+
+The custom username model is trained offline with scikit-learn from synthetic
+pairs and exported to versioned JSON plus ONNX. `agent-core` embeds and validates
+the JSON logistic coefficients, extracts the same four documented similarity
+features, and performs local inference without network access or a native model
+runtime. The ONNX artifact provides a portable representation for future
+runtime integration and cross-implementation verification.

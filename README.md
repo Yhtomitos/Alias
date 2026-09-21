@@ -9,7 +9,7 @@ Offline Rust workspace foundation with:
 - `crypto-core` (authenticated local record encryption)
 - `vault-core` (vault data model, in-memory service, encrypted local CRUD service)
 - `identity-graph` (personas, email/username identities, dependency queries)
-- `agent-core` (explainable username heuristic, agent interfaces, policy enforcement)
+- `agent-core` (username heuristic/model, agent interfaces, policy enforcement)
 
 The username heuristic exposes bounded component scores for local analysis; see
 [`docs/username-similarity.md`](docs/username-similarity.md) for its behavior
@@ -18,3 +18,7 @@ and limitations.
 Local agents run through a least-privilege policy boundary that validates field
 access and independently requires approval for state-changing recommendations.
 See [`docs/agent-security.md`](docs/agent-security.md) for the security contract.
+
+The first custom model is a synthetic-data logistic baseline with local Rust
+inference and ONNX export. Training and evaluation details live in
+[`models/username-similarity`](models/username-similarity/README.md).
