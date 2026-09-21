@@ -385,6 +385,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync-core"
+version = "0.1.0"
+dependencies = [
+ "crypto-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"

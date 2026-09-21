@@ -44,3 +44,17 @@ the JSON logistic coefficients, extracts the same four documented similarity
 features, and performs local inference without network access or a native model
 runtime. The ONNX artifact provides a portable representation for future
 runtime integration and cross-implementation verification.
+
+## Encrypted Synchronization
+
+`sync-core` defines a cloud-independent, ciphertext-only synchronization
+contract. It models per-owner record partitions, optimistic revisions,
+deletion tombstones, bounded incremental pages, and owner-scoped cursors. Its
+in-memory implementation is a reference for protocol and adapter tests, not a
+durable backend.
+
+Future Cognito/API Gateway/Lambda/DynamoDB adapters must derive opaque ownership
+from verified authentication claims and perform revision comparison plus update
+atomically. They must not decrypt records or accept client-selected owner IDs.
+See [`sync-protocol.md`](sync-protocol.md) for the wire contract and current
+rollback-protection limits.
