@@ -26,5 +26,28 @@ or language-specific similarities.
 
 Usernames remain identity data. Analysis should stay local, raw inputs should
 not be logged, and persona or graph changes based on a score require user
-review. A future learned model may augment this heuristic, but must preserve
-these privacy and approval boundaries.
+review.
+
+## Learned Baseline
+
+`agent-core` also embeds `username-similarity-logistic-v1`, a logistic-regression
+baseline trained on deterministic synthetic username pairs. It consumes the
+same four signals as the heuristic and returns a local same-persona likelihood,
+threshold decision, weighted feature contributions, and human-readable reasons.
+`UsernamePersonaAgent::with_embedded_model` opts into model scoring; the default
+agent continues to use the original heuristic.
+
+The model is exported as both a versioned JSON coefficient artifact and ONNX.
+Rust currently evaluates the audited JSON coefficients directly, avoiding a
+native inference-runtime dependency. Loading rejects unsupported versions,
+changed feature ordering, non-finite coefficients, and invalid thresholds.
+
+Training compares logistic regression with a small random forest and records
+holdout precision and recall in `model.json`. Current measurements use only an
+easy synthetic dataset and validate the pipeline rather than real-world
+accuracy, fairness, or calibration. See
+[`models/username-similarity/README.md`](../models/username-similarity/README.md)
+for reproduction instructions and data constraints.
+
+Model output remains advisory. It cannot authorize graph changes, and the
+policy engine always requires user approval for persona assignment.

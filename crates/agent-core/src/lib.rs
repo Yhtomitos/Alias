@@ -405,6 +405,207 @@ pub struct UsernameSimilarity {
     pub score: f32,
 }
 
+const USERNAME_MODEL_FORMAT_VERSION: u32 = 1;
+const USERNAME_MODEL_FEATURE_NAMES: [&str; 4] = [
+    "normalized_edit",
+    "jaro_winkler",
+    "bigram",
+    "numeric_suffix",
+];
+
+/// Errors returned while loading a username similarity model.
+#[derive(Debug, Error)]
+pub enum UsernameModelError {
+    /// The model artifact is not valid JSON.
+    #[error("username model is not valid JSON: {0}")]
+    InvalidJson(#[from] serde_json::Error),
+
+    /// The artifact uses a format version this client does not understand.
+    #[error("unsupported username model format version: {0}")]
+    UnsupportedFormat(u32),
+
+    /// The model name is empty.
+    #[error("username model name must not be empty")]
+    EmptyModelName,
+
+    /// Feature names or ordering do not match the Rust extraction contract.
+    #[error("username model feature schema does not match this client")]
+    FeatureSchemaMismatch,
+
+    /// A coefficient is missing, non-finite, or otherwise unusable.
+    #[error("username model coefficients are invalid")]
+    InvalidCoefficients,
+
+    /// The classification threshold is non-finite or outside `0.0..=1.0`.
+    #[error("username model threshold is invalid")]
+    InvalidThreshold,
+}
+
+#[derive(Debug, Deserialize)]
+struct SerializedUsernameModel {
+    format_version: u32,
+    model_name: String,
+    feature_names: Vec<String>,
+    weights: Vec<f32>,
+    bias: f32,
+    threshold: f32,
+}
+
+/// Validated local logistic-regression model for username pairs.
+///
+/// The model consumes the same four non-secret similarity signals as the
+/// heuristic. It does not retain input usernames or perform network access.
+#[derive(Debug, Clone)]
+pub struct UsernameSimilarityModel {
+    name: String,
+    weights: [f32; 4],
+    bias: f32,
+    threshold: f32,
+}
+
+impl UsernameSimilarityModel {
+    /// Loads a model from the versioned JSON coefficient format.
+    ///
+    /// Feature names and order must exactly match `username_model_features`.
+    /// All coefficients must be finite, and the threshold must be in
+    /// `0.0..=1.0`.
+    pub fn from_json(json: &str) -> Result<Self, UsernameModelError> {
+        let serialized: SerializedUsernameModel = serde_json::from_str(json)?;
+        if serialized.format_version != USERNAME_MODEL_FORMAT_VERSION {
+            return Err(UsernameModelError::UnsupportedFormat(
+                serialized.format_version,
+            ));
+        }
+        if serialized.model_name.trim().is_empty() {
+            return Err(UsernameModelError::EmptyModelName);
+        }
+        if serialized.feature_names != USERNAME_MODEL_FEATURE_NAMES {
+            return Err(UsernameModelError::FeatureSchemaMismatch);
+        }
+
+        let weights: [f32; 4] = serialized
+            .weights
+            .try_into()
+            .map_err(|_| UsernameModelError::InvalidCoefficients)?;
+        if !serialized.bias.is_finite() || weights.iter().any(|weight| !weight.is_finite()) {
+            return Err(UsernameModelError::InvalidCoefficients);
+        }
+        if !serialized.threshold.is_finite() || !(0.0..=1.0).contains(&serialized.threshold) {
+            return Err(UsernameModelError::InvalidThreshold);
+        }
+
+        Ok(Self {
+            name: serialized.model_name,
+            weights,
+            bias: serialized.bias,
+            threshold: serialized.threshold,
+        })
+    }
+
+    /// Loads the synthetic logistic baseline embedded in `agent-core`.
+    pub fn embedded() -> Result<Self, UsernameModelError> {
+        Self::from_json(include_str!(
+            "../../../models/username-similarity/model.json"
+        ))
+    }
+
+    /// Returns the stable model name recorded in recommendations.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the model's classification threshold.
+    pub fn threshold(&self) -> f32 {
+        self.threshold
+    }
+
+    /// Runs local inference for a username pair.
+    ///
+    /// The returned explanations describe model inputs and contributions, not
+    /// proof that the accounts share an owner. No input usernames are retained
+    /// in the prediction.
+    pub fn predict(&self, lhs: &str, rhs: &str) -> UsernameModelPrediction {
+        let features = username_model_features(lhs, rhs);
+        let feature_contributions =
+            std::array::from_fn(|index| features[index] * self.weights[index]);
+        let logit = self.bias + feature_contributions.iter().sum::<f32>();
+        let likelihood = stable_sigmoid(logit);
+
+        let mut ranked_contributions: Vec<(&str, f32)> = USERNAME_MODEL_FEATURE_NAMES
+            .iter()
+            .copied()
+            .zip(feature_contributions)
+            .filter(|(_, contribution)| *contribution > 0.0)
+            .collect();
+        ranked_contributions.sort_by(|lhs, rhs| rhs.1.total_cmp(&lhs.1));
+        let mut reasons: Vec<String> = ranked_contributions
+            .into_iter()
+            .take(2)
+            .map(|(feature, contribution)| {
+                format!(
+                    "{} contributed {:.2} to the model score",
+                    feature.replace('_', " "),
+                    contribution
+                )
+            })
+            .collect();
+        if reasons.is_empty() {
+            reasons.push("no positive username similarity signals".to_string());
+        }
+
+        UsernameModelPrediction {
+            model_name: self.name.clone(),
+            likelihood,
+            same_persona: likelihood >= self.threshold,
+            feature_contributions,
+            reasons,
+        }
+    }
+}
+
+/// Result of local inference with the username similarity model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsernameModelPrediction {
+    /// Stable name of the model artifact used for inference.
+    pub model_name: String,
+
+    /// Model likelihood in the inclusive range `0.0..=1.0`.
+    pub likelihood: f32,
+
+    /// Whether likelihood meets the model's stored threshold.
+    pub same_persona: bool,
+
+    /// Per-feature weighted contributions in the versioned feature order.
+    pub feature_contributions: [f32; 4],
+
+    /// Human-readable descriptions of the strongest positive signals.
+    pub reasons: Vec<String>,
+}
+
+/// Extracts the versioned feature vector consumed by the username model.
+///
+/// Feature order is normalized edit, Jaro-Winkler, character bigram overlap,
+/// and numeric suffix agreement. Changing this order requires a new model
+/// format version and retraining.
+pub fn username_model_features(lhs: &str, rhs: &str) -> [f32; 4] {
+    let similarity = username_similarity(lhs, rhs);
+    [
+        similarity.normalized_edit,
+        similarity.jaro_winkler,
+        similarity.bigram,
+        similarity.numeric_suffix,
+    ]
+}
+
+fn stable_sigmoid(value: f32) -> f32 {
+    if value >= 0.0 {
+        1.0 / (1.0 + (-value).exp())
+    } else {
+        let exponential = value.exp();
+        exponential / (1.0 + exponential)
+    }
+}
+
 /// Normalizes a username for similarity checks.
 ///
 /// Normalization trims surrounding whitespace, lowercases, removes whitespace,
@@ -589,11 +790,15 @@ pub fn combined_username_score(lhs: &str, rhs: &str) -> f32 {
 #[derive(Debug, Clone)]
 pub struct UsernamePersonaAgent {
     threshold: f32,
+    model: Option<UsernameSimilarityModel>,
 }
 
 impl Default for UsernamePersonaAgent {
     fn default() -> Self {
-        Self { threshold: 0.85 }
+        Self {
+            threshold: 0.85,
+            model: None,
+        }
     }
 }
 
@@ -634,7 +839,26 @@ impl UsernamePersonaAgent {
     /// assert_eq!(agent.analyze(&context).unwrap().len(), 1);
     /// ```
     pub fn new(threshold: f32) -> Self {
-        Self { threshold }
+        Self {
+            threshold,
+            model: None,
+        }
+    }
+
+    /// Creates an agent backed by a validated local model.
+    ///
+    /// The model's stored threshold controls whether the agent emits a
+    /// recommendation. Policy-engine approval requirements are unchanged.
+    pub fn with_model(model: UsernameSimilarityModel) -> Self {
+        Self {
+            threshold: model.threshold(),
+            model: Some(model),
+        }
+    }
+
+    /// Creates an agent using the model embedded in `agent-core`.
+    pub fn with_embedded_model() -> Result<Self, UsernameModelError> {
+        UsernameSimilarityModel::embedded().map(Self::with_model)
     }
 }
 
@@ -663,7 +887,24 @@ impl Agent for UsernamePersonaAgent {
                 };
 
                 let similarity = username_similarity(lhs_username, rhs_username);
-                let score = similarity.score;
+                let (score, mut reasons) = if let Some(model) = &self.model {
+                    let prediction = model.predict(lhs_username, rhs_username);
+                    let mut reasons = vec![format!(
+                        "{} model likelihood is {:.0}%",
+                        prediction.model_name,
+                        prediction.likelihood * 100.0
+                    )];
+                    reasons.extend(prediction.reasons);
+                    (prediction.likelihood, reasons)
+                } else {
+                    (
+                        similarity.score,
+                        vec![format!(
+                            "combined username similarity score is {:.0}%",
+                            similarity.score * 100.0
+                        )],
+                    )
+                };
                 if score < self.threshold {
                     continue;
                 }
@@ -672,10 +913,6 @@ impl Agent for UsernamePersonaAgent {
                     normalize_username(lhs_username) == normalize_username(rhs_username);
                 let matching_suffix = similarity.numeric_suffix == 1.0;
 
-                let mut reasons = vec![format!(
-                    "combined username similarity score is {:.0}%",
-                    score * 100.0
-                )];
                 if normalized_match {
                     reasons.push("same normalized base username".to_string());
                 }
@@ -716,9 +953,9 @@ impl Agent for UsernamePersonaAgent {
 mod tests {
     use super::{
         AccountView, Agent, AgentContext, AgentError, AgentPermissions, PolicyDecision,
-        PolicyEngine, PolicyError, Recommendation, RecommendedAction, UsernamePersonaAgent,
-        combined_username_score, normalize_username, normalized_edit_similarity,
-        username_similarity,
+        PolicyEngine, PolicyError, Recommendation, RecommendedAction, UsernameModelError,
+        UsernamePersonaAgent, UsernameSimilarityModel, combined_username_score, normalize_username,
+        normalized_edit_similarity, username_model_features, username_similarity,
     };
     use uuid::Uuid;
 
@@ -863,6 +1100,108 @@ mod tests {
 
         assert_eq!(forward, reverse);
         assert!((0.0..=1.0).contains(&forward.score));
+    }
+
+    #[test]
+    fn username_model_feature_order_matches_contract() {
+        assert_eq!(
+            username_model_features("dev_tim23", "DevTim23"),
+            [1.0, 1.0, 1.0, 1.0]
+        );
+
+        let fixture = username_model_features("martha", "marhta");
+        let expected = [2.0 / 3.0, 0.961_111_1, 0.25, 1.0];
+        for (actual, expected) in fixture.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 0.000_001);
+        }
+    }
+
+    #[test]
+    fn embedded_model_scores_related_usernames_above_unrelated_usernames() {
+        let model = UsernameSimilarityModel::embedded().expect("embedded model should be valid");
+
+        let related = model.predict("dev_tim23", "DevTim23");
+        let unrelated = model.predict("orbit_cedar", "plasmaquill");
+
+        assert_eq!(model.name(), "username-similarity-logistic-v1");
+        assert!(related.likelihood > unrelated.likelihood);
+        assert!(related.same_persona);
+        assert!(!unrelated.same_persona);
+        assert!(!related.reasons.is_empty());
+    }
+
+    #[test]
+    fn username_model_rejects_feature_schema_mismatch() {
+        let invalid = r#"{
+            "format_version": 1,
+            "model_name": "invalid",
+            "feature_names": ["bigram", "jaro_winkler", "normalized_edit", "numeric_suffix"],
+            "weights": [1.0, 1.0, 1.0, 1.0],
+            "bias": 0.0,
+            "threshold": 0.5
+        }"#;
+
+        assert!(matches!(
+            UsernameSimilarityModel::from_json(invalid),
+            Err(UsernameModelError::FeatureSchemaMismatch)
+        ));
+    }
+
+    #[test]
+    fn username_model_rejects_unsupported_versions_and_thresholds() {
+        let unsupported = include_str!("../../../models/username-similarity/model.json").replacen(
+            "\"format_version\": 1",
+            "\"format_version\": 2",
+            1,
+        );
+        assert!(matches!(
+            UsernameSimilarityModel::from_json(&unsupported),
+            Err(UsernameModelError::UnsupportedFormat(2))
+        ));
+
+        let invalid_threshold = include_str!("../../../models/username-similarity/model.json")
+            .replacen("\"threshold\": 0.5", "\"threshold\": 1.5", 1);
+        assert!(matches!(
+            UsernameSimilarityModel::from_json(&invalid_threshold),
+            Err(UsernameModelError::InvalidThreshold)
+        ));
+    }
+
+    #[test]
+    fn model_backed_agent_emits_model_explanation() {
+        let agent = UsernamePersonaAgent::with_embedded_model()
+            .expect("embedded model should construct an agent");
+        let permissions = AgentPermissions::username_persona_defaults();
+        let context = AgentContext {
+            permissions: permissions.clone(),
+            accounts: vec![
+                AccountView {
+                    record_id: Uuid::new_v4(),
+                    service: "GitHub".to_string(),
+                    username: Some("dev_tim23".to_string()),
+                    persona: None,
+                    tags: vec![],
+                },
+                AccountView {
+                    record_id: Uuid::new_v4(),
+                    service: "Reddit".to_string(),
+                    username: Some("DevTim23".to_string()),
+                    persona: None,
+                    tags: vec![],
+                },
+            ],
+        };
+        let engine = PolicyEngine::new(permissions);
+
+        let evaluations = engine
+            .run(&agent, &context)
+            .expect("model-backed agent should pass policy");
+
+        assert_eq!(evaluations.len(), 1);
+        assert!(
+            evaluations[0].recommendation.reasons[0].contains("username-similarity-logistic-v1")
+        );
+        assert_eq!(evaluations[0].decision, PolicyDecision::RequireApproval);
     }
 
     #[test]
