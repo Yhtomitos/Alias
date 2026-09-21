@@ -1,18 +1,8 @@
 {
   "format_version": 1,
   "model_name": "username-similarity-logistic-v1",
-  "feature_names": [
-    "normalized_edit",
-    "jaro_winkler",
-    "bigram",
-    "numeric_suffix"
-  ],
-  "weights": [
-    6.572399616,
-    3.942028999,
-    5.574525356,
-    0.052845303
-  ],
+  "feature_names": ["normalized_edit", "jaro_winkler", "bigram", "numeric_suffix"],
+  "weights": [6.572399616, 3.942028999, 5.574525356, 0.052845303],
   "bias": -8.770959854,
   "threshold": 0.5,
   "training": {

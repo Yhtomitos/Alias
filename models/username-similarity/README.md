@@ -8,9 +8,13 @@ username similarity inference.
 Create an isolated Python environment and install the pinned dependencies:
 
 ```powershell
+npm install
 python -m venv .venv-model
 .venv-model\Scripts\python.exe -m pip install -r models\username-similarity\requirements.txt
 ```
+
+The trainer uses the repository's pinned Prettier installation to format the
+generated JSON artifact before returning.
 
 Run the contract tests and regenerate both artifacts:
 

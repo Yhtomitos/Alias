@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +26,28 @@ FEATURE_NAMES = [
     "bigram",
     "numeric_suffix",
 ]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def format_model_json(path: Path) -> None:
+    """Format a generated artifact with the repository's pinned Prettier."""
+    executable_name = "prettier.cmd" if os.name == "nt" else "prettier"
+    prettier = REPOSITORY_ROOT / "node_modules" / ".bin" / executable_name
+    if not prettier.is_file():
+        raise RuntimeError("Prettier is unavailable; run npm install before training")
+    subprocess.run(
+        [
+            str(prettier),
+            "--config",
+            str(REPOSITORY_ROOT / "static-analysis/formatters/prettier.json"),
+            "--write",
+            str(path),
+        ],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def normalize_username(value: str) -> str:
@@ -281,9 +305,11 @@ def train(output_dir: Path, sample_count: int) -> None:
             "random_forest": forest_metrics,
         },
     }
-    (output_dir / "model.json").write_text(
+    model_json_path = output_dir / "model.json"
+    model_json_path.write_text(
         json.dumps(artifact, indent=2) + "\n", encoding="utf-8"
     )
+    format_model_json(model_json_path)
 
     onnx_model = convert_sklearn(
         logistic,
