@@ -4,6 +4,7 @@ members = [
     "crates/vault-core",
     "crates/identity-graph",
     "crates/agent-core",
+    "crates/sync-core",
 ]
 resolver = "2"
 
