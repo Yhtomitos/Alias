@@ -1874,6 +1874,124 @@ Work in this order:
 [10] AWS encrypted synchronization
 ```
 
+## AWS Tool Integration Workflow
+
+Implement step 10 in independently reviewable slices. Infrastructure code must
+remain account-neutral so contributors can deploy Alias into AWS accounts they
+control without receiving access to a project-owned account.
+
+Work in this order:
+
+```text
+[10.1] Cloud-independent sync protocol
+          |
+          v
+[10.2] AWS CDK application + synthesis tests
+          |
+          v
+[10.3] DynamoDB encrypted-record adapter
+          |
+          v
+[10.4] Lambda upload/download handlers
+          |
+          v
+[10.5] Cognito + API Gateway JWT authorization
+          |
+          v
+[10.6] Client configuration + authenticated integration
+          |
+          v
+[10.7] Cost, observability, security, and teardown controls
+          |
+          v
+[10.8] Two-device ciphertext-only integration test
+```
+
+### Developer-Owned AWS Setup
+
+The repository must support deployment through a named AWS CLI profile. Prefer
+IAM Identity Center or another source of temporary credentials. Never request,
+store, commit, print, or document real access keys, session tokens, account IDs,
+user-pool IDs, client IDs, or other deployment-specific values.
+
+Each developer supplies locally:
+
+- an AWS account they are authorized to use, preferably a sandbox account
+- one deployment Region
+- a named AWS CLI profile
+- a unique stage name, such as `alice-dev`
+- a development budget amount and notification email
+- explicit self-signup, MFA, and data-retention choices
+
+Account and Region values must be resolved from the selected profile or explicit
+deployment context. CDK stacks must not hardcode them. Stack and resource names
+must include the stage so independent developer deployments do not collide.
+
+The documented deployment flow should be equivalent to:
+
+```text
+aws configure sso --profile alias-dev
+aws sso login --profile alias-dev
+aws sts get-caller-identity --profile alias-dev
+cdk bootstrap aws://<account-id>/<region> --profile alias-dev
+cdk synth --context stage=<developer-stage>
+cdk deploy --context stage=<developer-stage> --profile alias-dev
+```
+
+Commands that create, change, or delete AWS resources require explicit user
+approval. Local tests and `cdk synth` must work without deploying resources.
+
+### Infrastructure Requirements
+
+The CDK application must provide configurable development and production
+stages. Development stacks should favor inexpensive, removable resources;
+production stacks should retain durable data unless an operator explicitly
+chooses otherwise.
+
+Initial infrastructure must include:
+
+- a Cognito User Pool and public native-app client with no client secret
+- an API Gateway HTTP API with JWT authorization and explicit scopes
+- Lambda handlers with least-privilege IAM policies and bounded concurrency
+- a DynamoDB on-demand table partitioned by opaque authenticated owner ID
+- atomic revision checks through DynamoDB conditional writes
+- short development CloudWatch log retention without sensitive payload logging
+- API throttling, request-size limits, and AWS Budget notifications
+- CloudFormation outputs for non-secret client configuration
+
+Lambda handlers must derive the owner ID from verified JWT claims. They must
+never accept an owner ID, DynamoDB partition key, or authorization decision from
+the request body. AWS services may receive ciphertext and synchronization
+metadata only; they must never receive vault plaintext or vault decryption keys.
+
+### Local Configuration and Portability
+
+Provide scripts that convert CloudFormation outputs into a gitignored local
+configuration file containing only non-secret values such as Region, API URL,
+User Pool ID, and public app-client ID. Do not commit generated deployment
+configuration.
+
+Keep the cloud adapter behind the shared sync interfaces so local development
+continues to work with the in-memory implementation. A contributor who does not
+have AWS credentials must still be able to build the application and run unit
+tests.
+
+### Verification and Teardown
+
+Before considering AWS integration complete:
+
+1. Verify authorization and owner isolation with two test users.
+2. Verify stale revisions, replayed mutations, conflicts, tombstones, and
+   incremental cursors against DynamoDB.
+3. Inspect requests, Lambda logs, and DynamoDB items to confirm that no plaintext
+   account data or key material leaves the client.
+4. Run CDK synthesis, infrastructure tests, Rust tests, static analysis, and
+   dependency-policy checks.
+5. Document expected resources, likely charges, retention behavior, deployment,
+   and `cdk destroy` cleanup.
+6. Confirm development teardown removes disposable resources and that retained
+   production resources are clearly reported for manual cleanup.
+
 Do not begin with a large autonomous LLM.
 
 The first intelligent feature should be small, testable, explainable, and directly useful to the identity-management problem.
