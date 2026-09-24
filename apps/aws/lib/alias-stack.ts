@@ -7,8 +7,16 @@ export interface AliasStackProps extends StackProps {
 
 export class AliasStack extends Stack {
   public constructor(scope: Construct, id: string, props: AliasStackProps) {
-    super(scope, id, props);
+    const { stage, ...stackProps } = props;
+    if (!/^[a-z][a-z0-9-]{1,19}$/.test(stage)) {
+      throw new Error("stage must be 2-20 lowercase letters, numbers, or hyphens");
+    }
 
-    this.tags.setTag("alias:stage", props.stage);
+    super(scope, id, {
+      description: `Alias encrypted synchronization (${stage})`,
+      ...stackProps
+    });
+
+    this.tags.setTag("alias:stage", stage);
   }
 }
