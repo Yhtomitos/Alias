@@ -1,4 +1,5 @@
-import { Stack, type StackProps } from "aws-cdk-lib";
+import { RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import { AttributeType, BillingMode, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
 import type { Construct } from "constructs";
 
 export interface AliasStackProps extends StackProps {
@@ -18,5 +19,19 @@ export class AliasStack extends Stack {
     });
 
     this.tags.setTag("alias:stage", stage);
+
+    const production = stage === "prod";
+    new Table(this, "SyncTable", {
+      billingMode: BillingMode.PAY_PER_REQUEST,
+      deletionProtection: production,
+      encryption: TableEncryption.AWS_MANAGED,
+      partitionKey: { name: "pk", type: AttributeType.STRING },
+      ...(production
+        ? { pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true } }
+        : {}),
+      removalPolicy: production ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+      sortKey: { name: "sk", type: AttributeType.STRING },
+      tableName: `alias-${stage}-sync`
+    });
   }
 }
