@@ -1,4 +1,6 @@
 /target/
+/cdk.out/
+/node_modules/
 .venv-model/
 __pycache__/
 *.py[cod]

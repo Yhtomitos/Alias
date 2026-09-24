@@ -1,0 +1,3 @@
+{
+  "app": "npx tsx apps/aws/bin/alias.ts"
+}
