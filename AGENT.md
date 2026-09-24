@@ -1971,6 +1971,67 @@ configuration file containing only non-secret values such as Region, API URL,
 User Pool ID, and public app-client ID. Do not commit generated deployment
 configuration.
 
+The official application should use a project-operated AWS deployment by
+default while allowing a user to select an independent deployment in an AWS
+account they control. The client switches between backend environments; it must
+never receive IAM access keys, assume deployment roles, invoke the AWS CLI, or
+switch AWS profiles at runtime. AWS profiles and temporary credentials are
+control-plane tools used only to synthesize, deploy, inspect, and destroy
+infrastructure.
+
+The project-operated deployment should live in a dedicated AWS member account,
+not an AWS Organizations management account or a maintainer's personal account.
+Official releases may embed its non-secret client configuration. Production
+deployments should use retained durable data, monitored budgets, restricted
+operator access, and an explicit signup and MFA policy. CI deployments should
+use short-lived credentials obtained through GitHub Actions OIDC rather than
+stored AWS access keys.
+
+Every deployment must emit a versioned environment manifest with a stable
+schema equivalent to:
+
+```json
+{
+  "schemaVersion": 1,
+  "environmentId": "alias-hosted",
+  "displayName": "Alias Hosted",
+  "region": "us-west-2",
+  "apiBaseUrl": "https://api.example.invalid",
+  "cognitoIssuer": "https://cognito-idp.us-west-2.amazonaws.com/example",
+  "userPoolId": "us-west-2_example",
+  "appClientId": "example-public-client",
+  "scopes": ["alias/read", "alias/write"]
+}
+```
+
+The manifest contains public identifiers and endpoints only; it must never
+contain credentials, client secrets, private keys, deployment-role ARNs, budget
+notification addresses, or vault key material. Generated manifests for local
+deployments must remain gitignored. The manifest loader must validate its schema
+version, required fields, HTTPS endpoints, Cognito issuer and Region agreement,
+and supported scopes before persisting or using the configuration.
+
+The future client infrastructure selector should provide these modes:
+
+- `Alias Hosted`, selected by default and backed by the project-operated account
+- `Custom AWS deployment`, configured by importing a manifest or entering the
+  same non-secret values
+- `Local Only`, using no cloud synchronization
+
+Switching environments must sign out the current Cognito session, lock the
+local vault, discard in-memory credentials, and namespace cached tokens and sync
+metadata by `environmentId` and authenticated Cognito subject. The client must
+clearly state that accounts and cloud data are isolated between environments.
+Switching must not silently copy or migrate records. Any future migration must
+be an explicit encrypted export/import or synchronization workflow with user
+confirmation.
+
+Independent deployments must not require cross-account IAM trust with the
+project-operated account. Each operator bootstraps and deploys the same
+account-neutral CDK application in their own account, then imports that
+deployment's manifest into the client. Stack names, data, authentication,
+budgets, logs, and teardown remain owned by that account.
+
 Keep the cloud adapter behind the shared sync interfaces so local development
 continues to work with the in-memory implementation. A contributor who does not
 have AWS credentials must still be able to build the application and run unit
