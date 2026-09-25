@@ -5,7 +5,7 @@
   "scripts": {
     "format:check": "prettier --config static-analysis/formatters/prettier.json --ignore-path static-analysis/formatters/prettierignore --check \"**/*.{js,mjs,cjs,ts,tsx,json,jsonc,yml,yaml,css,html}\"",
     "infra:synth": "cdk synth",
-    "infra:test": "tsx --test apps/aws/test/alias-stack.test.ts",
+    "infra:test": "tsx --test apps/aws/test/alias-stack.test.ts apps/aws/test/sync-item.test.ts",
     "lint": "eslint . --config static-analysis/linters/eslint.config.mjs --max-warnings=0",
     "typecheck": "node static-analysis/type-safety/typecheck-if-present.mjs"
   },
