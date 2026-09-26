@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { toSyncRecordItem, type SyncRecordValue } from "../lib/sync-item.js";
+import { revisionCondition, toSyncRecordItem, type SyncRecordValue } from "../lib/sync-item.js";
 
 const ownerId = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
 const recordId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -78,4 +78,20 @@ void test("rejects invalid identifiers and record invariants", () => {
       }),
     /revision and sequence must be positive/
   );
+});
+
+void test("creates only when the record does not exist", () => {
+  assert.deepEqual(revisionCondition(null), {
+    ConditionExpression: "attribute_not_exists(#pk)",
+    ExpressionAttributeNames: { "#pk": "pk" }
+  });
+});
+
+void test("updates only the expected positive revision", () => {
+  assert.deepEqual(revisionCondition(9n), {
+    ConditionExpression: "#revision = :expected_revision",
+    ExpressionAttributeNames: { "#revision": "revision" },
+    ExpressionAttributeValues: { ":expected_revision": 9n }
+  });
+  assert.throws(() => revisionCondition(0n), /expected revision must be positive/);
 });
