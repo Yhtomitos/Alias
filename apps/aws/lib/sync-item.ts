@@ -26,6 +26,29 @@ export interface SyncRecordItem {
   readonly encrypted_record?: EncryptedRecordValue;
 }
 
+export interface RevisionCondition {
+  readonly ConditionExpression: string;
+  readonly ExpressionAttributeNames: Readonly<Record<string, string>>;
+  readonly ExpressionAttributeValues?: Readonly<Record<string, bigint>>;
+}
+
+export function revisionCondition(expectedRevision: bigint | null): RevisionCondition {
+  if (expectedRevision === null) {
+    return {
+      ConditionExpression: "attribute_not_exists(#pk)",
+      ExpressionAttributeNames: { "#pk": "pk" }
+    };
+  }
+  if (expectedRevision < 1n) {
+    throw new Error("expected revision must be positive");
+  }
+  return {
+    ConditionExpression: "#revision = :expected_revision",
+    ExpressionAttributeNames: { "#revision": "revision" },
+    ExpressionAttributeValues: { ":expected_revision": expectedRevision }
+  };
+}
+
 function opaqueKey(prefix: "USER" | "RECORD", value: string): string {
   if (!UUID_PATTERN.test(value)) {
     throw new Error(`${prefix === "USER" ? "owner" : "record"} ID must be a UUID`);
