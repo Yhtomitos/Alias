@@ -56,6 +56,10 @@ function opaqueKey(prefix: "USER" | "RECORD", value: string): string {
   return `${prefix}#${value.toLowerCase()}`;
 }
 
+export function ownerKey(ownerId: string): string {
+  return opaqueKey("USER", ownerId);
+}
+
 export function toSyncRecordItem(ownerId: string, record: SyncRecordValue): SyncRecordItem {
   if (record.revision < 1n || record.serverSequence < 1n) {
     throw new Error("sync revision and sequence must be positive");
@@ -65,7 +69,7 @@ export function toSyncRecordItem(ownerId: string, record: SyncRecordValue): Sync
   }
 
   const item: SyncRecordItem = {
-    pk: opaqueKey("USER", ownerId),
+    pk: ownerKey(ownerId),
     sk: opaqueKey("RECORD", record.recordId),
     record_id: record.recordId.toLowerCase(),
     revision: record.revision,
