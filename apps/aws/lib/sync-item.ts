@@ -60,6 +60,10 @@ export function ownerKey(ownerId: string): string {
   return opaqueKey("USER", ownerId);
 }
 
+export function recordKey(recordId: string): string {
+  return opaqueKey("RECORD", recordId);
+}
+
 export function toSyncRecordItem(ownerId: string, record: SyncRecordValue): SyncRecordItem {
   if (record.revision < 1n || record.serverSequence < 1n) {
     throw new Error("sync revision and sequence must be positive");
@@ -70,7 +74,7 @@ export function toSyncRecordItem(ownerId: string, record: SyncRecordValue): Sync
 
   const item: SyncRecordItem = {
     pk: ownerKey(ownerId),
-    sk: opaqueKey("RECORD", record.recordId),
+    sk: recordKey(record.recordId),
     record_id: record.recordId.toLowerCase(),
     revision: record.revision,
     server_sequence: record.serverSequence,

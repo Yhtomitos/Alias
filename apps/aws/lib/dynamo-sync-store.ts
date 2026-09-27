@@ -3,8 +3,10 @@ import { PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 import {
   ownerKey,
+  recordKey,
   revisionCondition,
   toSyncRecordItem,
+  type EncryptedRecordValue,
   type SyncRecordValue
 } from "./sync-item.js";
 
@@ -13,6 +15,14 @@ export interface DynamoCommandClient {
 }
 
 export class SyncConflictError extends Error {}
+
+export type SyncMutationValue =
+  | {
+      readonly operation: "upsert";
+      readonly expectedRevision: bigint | null;
+      readonly encryptedRecord: EncryptedRecordValue;
+    }
+  | { readonly operation: "delete"; readonly expectedRevision: bigint };
 
 export class DynamoSyncStore {
   public constructor(
@@ -40,6 +50,26 @@ export class DynamoSyncStore {
       return BigInt(sequence);
     }
     throw new Error("DynamoDB returned an invalid server sequence");
+  }
+
+  public async applyMutation(
+    ownerId: string,
+    recordId: string,
+    mutation: SyncMutationValue
+  ): Promise<SyncRecordValue> {
+    recordKey(recordId);
+    revisionCondition(mutation.expectedRevision);
+    const serverSequence = await this.nextSequence(ownerId);
+    const record: SyncRecordValue = {
+      recordId,
+      revision: mutation.expectedRevision === null ? 1n : mutation.expectedRevision + 1n,
+      serverSequence,
+      encryptedRecord: mutation.operation === "upsert" ? mutation.encryptedRecord : null,
+      deleted: mutation.operation === "delete"
+    };
+
+    await this.put(ownerId, record, mutation.expectedRevision);
+    return record;
   }
 
   public async put(
