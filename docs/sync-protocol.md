@@ -58,6 +58,12 @@ PK = USER#<opaque authenticated owner UUID>
 SK = RECORD#<opaque record UUID>
 ```
 
+The DynamoDB adapter reserves `SK = META#SYNC` in each owner partition for the
+latest `server_sequence`. It allocates a sequence with an atomic `ADD` before a
+conditional record write. A rejected write or interrupted request may therefore
+leave a sequence gap; cursors are monotonic markers and must not assume that
+sequences are contiguous.
+
 ## Incremental Download
 
 Each owner has an independent monotonically increasing `server_sequence`.

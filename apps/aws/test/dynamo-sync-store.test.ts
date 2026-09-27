@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import type { PutCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 import {
   DynamoSyncStore,
@@ -20,7 +20,7 @@ const record = {
 };
 
 void test("sends a create-only ciphertext item put", async () => {
-  const commands: PutCommand[] = [];
+  const commands: Array<PutCommand | UpdateCommand> = [];
   const client: DynamoCommandClient = {
     send(command) {
       commands.push(command);
@@ -31,12 +31,38 @@ void test("sends a create-only ciphertext item put", async () => {
   await new DynamoSyncStore(client, "alias-test-sync").put(ownerId, record, null);
 
   const command = commands[0];
-  assert.ok(command);
+  assert.ok(command instanceof PutCommand);
   assert.equal(command.input.TableName, "alias-test-sync");
   assert.equal(command.input.ConditionExpression, "attribute_not_exists(#pk)");
   const item = command.input.Item;
   assert.ok(item);
   assert.equal(item.pk, `USER#${ownerId}`);
+});
+
+void test("atomically allocates an owner-scoped sequence", async () => {
+  let command: PutCommand | UpdateCommand | undefined;
+  const client: DynamoCommandClient = {
+    send(sentCommand) {
+      command = sentCommand;
+      return Promise.resolve({ Attributes: { server_sequence: 4 } });
+    }
+  };
+
+  const sequence = await new DynamoSyncStore(client, "alias-test-sync").nextSequence(ownerId);
+
+  assert.equal(sequence, 4n);
+  assert.ok(command instanceof UpdateCommand);
+  assert.deepEqual(command.input.Key, { pk: `USER#${ownerId}`, sk: "META#SYNC" });
+  assert.equal(command.input.UpdateExpression, "ADD #server_sequence :one");
+});
+
+void test("rejects invalid sequence responses", async () => {
+  const client: DynamoCommandClient = { send: () => Promise.resolve({ Attributes: {} }) };
+
+  await assert.rejects(
+    new DynamoSyncStore(client, "alias-test-sync").nextSequence(ownerId),
+    /invalid server sequence/
+  );
 });
 
 void test("maps conditional failures to sync conflicts", async () => {
