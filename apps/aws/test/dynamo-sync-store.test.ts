@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import { PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 import {
   DynamoSyncStore,
@@ -19,7 +19,9 @@ const record = {
   deleted: true
 };
 
-function successfulClient(commands: Array<PutCommand | UpdateCommand>): DynamoCommandClient {
+type SyncCommand = GetCommand | PutCommand | UpdateCommand;
+
+function successfulClient(commands: SyncCommand[]): DynamoCommandClient {
   return {
     send(command) {
       commands.push(command);
@@ -31,7 +33,7 @@ function successfulClient(commands: Array<PutCommand | UpdateCommand>): DynamoCo
 }
 
 void test("sends a create-only ciphertext item put", async () => {
-  const commands: Array<PutCommand | UpdateCommand> = [];
+  const commands: SyncCommand[] = [];
   const client: DynamoCommandClient = {
     send(command) {
       commands.push(command);
@@ -51,7 +53,7 @@ void test("sends a create-only ciphertext item put", async () => {
 });
 
 void test("atomically allocates an owner-scoped sequence", async () => {
-  let command: PutCommand | UpdateCommand | undefined;
+  let command: SyncCommand | undefined;
   const client: DynamoCommandClient = {
     send(sentCommand) {
       command = sentCommand;
@@ -77,7 +79,7 @@ void test("rejects invalid sequence responses", async () => {
 });
 
 void test("applies a deletion with server-authoritative metadata", async () => {
-  const commands: Array<PutCommand | UpdateCommand> = [];
+  const commands: SyncCommand[] = [];
   const store = new DynamoSyncStore(successfulClient(commands), "alias-test-sync");
 
   const result = await store.applyMutation(ownerId, record.recordId, {
@@ -109,6 +111,32 @@ void test("applies an encrypted first revision", async () => {
   assert.equal(result.revision, 1n);
   assert.equal(result.encryptedRecord, encryptedRecord);
   assert.equal(result.deleted, false);
+});
+
+void test("reads the current owner-scoped record consistently", async () => {
+  let command: SyncCommand | undefined;
+  const client: DynamoCommandClient = {
+    send(sentCommand) {
+      command = sentCommand;
+      return Promise.resolve({
+        Item: {
+          pk: `USER#${ownerId}`,
+          sk: `RECORD#${record.recordId}`,
+          record_id: record.recordId,
+          revision: 1,
+          server_sequence: 1,
+          deleted: true
+        }
+      });
+    }
+  };
+
+  assert.deepEqual(
+    await new DynamoSyncStore(client, "alias-test-sync").currentRecord(ownerId, record.recordId),
+    record
+  );
+  assert.ok(command instanceof GetCommand);
+  assert.equal(command.input.ConsistentRead, true);
 });
 
 void test("maps conditional failures to sync conflicts", async () => {

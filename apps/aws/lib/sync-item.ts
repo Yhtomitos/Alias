@@ -64,6 +64,76 @@ export function recordKey(recordId: string): string {
   return opaqueKey("RECORD", recordId);
 }
 
+function malformedItem(): never {
+  throw new Error("DynamoDB returned a malformed sync record");
+}
+
+function positiveInteger(value: unknown): bigint {
+  if (typeof value === "bigint" && value > 0n) return value;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+    return BigInt(value);
+  }
+  return malformedItem();
+}
+
+export function fromSyncRecordItem(
+  ownerId: string,
+  recordId: string,
+  value: unknown
+): SyncRecordValue {
+  if (typeof value !== "object" || value === null) return malformedItem();
+  const item = value as Record<string, unknown>;
+  if (
+    item.pk !== ownerKey(ownerId) ||
+    item.sk !== recordKey(recordId) ||
+    item.record_id !== recordId.toLowerCase() ||
+    typeof item.deleted !== "boolean"
+  ) {
+    return malformedItem();
+  }
+
+  const encrypted = item.encrypted_record;
+  if (item.deleted) {
+    if (encrypted !== undefined) return malformedItem();
+    return {
+      recordId: recordId.toLowerCase(),
+      revision: positiveInteger(item.revision),
+      serverSequence: positiveInteger(item.server_sequence),
+      encryptedRecord: null,
+      deleted: true
+    };
+  }
+  if (typeof encrypted !== "object" || encrypted === null) return malformedItem();
+  const fields = encrypted as Record<string, unknown>;
+  if (
+    !(fields.ciphertext instanceof Uint8Array) ||
+    !(fields.wrappedRecordKey instanceof Uint8Array) ||
+    !(fields.nonce instanceof Uint8Array) ||
+    fields.nonce.length !== 24 ||
+    !(fields.keyWrappingNonce instanceof Uint8Array) ||
+    fields.keyWrappingNonce.length !== 24 ||
+    typeof fields.cryptoVersion !== "number" ||
+    !Number.isInteger(fields.cryptoVersion) ||
+    fields.cryptoVersion < 0 ||
+    fields.cryptoVersion > 255
+  ) {
+    return malformedItem();
+  }
+  return {
+    recordId: recordId.toLowerCase(),
+    revision: positiveInteger(item.revision),
+    serverSequence: positiveInteger(item.server_sequence),
+    encryptedRecord: {
+      ciphertext: fields.ciphertext,
+      wrappedRecordKey: fields.wrappedRecordKey,
+      nonce: fields.nonce,
+      keyWrappingNonce: fields.keyWrappingNonce,
+      cryptoVersion: fields.cryptoVersion
+    },
+    deleted: false
+  };
+}
+
 export function toSyncRecordItem(ownerId: string, record: SyncRecordValue): SyncRecordItem {
   if (record.revision < 1n || record.serverSequence < 1n) {
     throw new Error("sync revision and sequence must be positive");

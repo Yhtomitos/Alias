@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { revisionCondition, toSyncRecordItem, type SyncRecordValue } from "../lib/sync-item.js";
+import {
+  fromSyncRecordItem,
+  revisionCondition,
+  toSyncRecordItem,
+  type SyncRecordValue
+} from "../lib/sync-item.js";
 
 const ownerId = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
 const recordId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -41,6 +46,13 @@ void test("maps only opaque keys, ciphertext, and sync metadata", () => {
     }
   });
   assert.equal("owner_id" in item, false);
+  assert.deepEqual(fromSyncRecordItem(ownerId, recordId, item), {
+    recordId,
+    revision: 2n,
+    serverSequence: 7n,
+    encryptedRecord: item.encrypted_record,
+    deleted: false
+  });
 });
 
 void test("maps tombstones without encrypted record data", () => {
@@ -52,7 +64,28 @@ void test("maps tombstones without encrypted record data", () => {
     deleted: true
   };
 
-  assert.equal("encrypted_record" in toSyncRecordItem(ownerId, tombstone), false);
+  const item = toSyncRecordItem(ownerId, tombstone);
+  assert.equal("encrypted_record" in item, false);
+  assert.deepEqual(fromSyncRecordItem(ownerId, recordId, item), tombstone);
+});
+
+void test("rejects malformed downloaded records", () => {
+  const item = toSyncRecordItem(ownerId, {
+    recordId,
+    revision: 1n,
+    serverSequence: 1n,
+    encryptedRecord,
+    deleted: false
+  });
+
+  assert.throws(
+    () => fromSyncRecordItem(ownerId, recordId, { ...item, server_sequence: 0 }),
+    /malformed sync record/
+  );
+  assert.throws(
+    () => fromSyncRecordItem(ownerId, recordId, { ...item, encrypted_record: undefined }),
+    /malformed sync record/
+  );
 });
 
 void test("rejects invalid identifiers and record invariants", () => {
