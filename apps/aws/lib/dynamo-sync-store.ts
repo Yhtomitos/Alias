@@ -1,7 +1,8 @@
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import { PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 import {
+  fromSyncRecordItem,
   ownerKey,
   recordKey,
   revisionCondition,
@@ -11,7 +12,7 @@ import {
 } from "./sync-item.js";
 
 export interface DynamoCommandClient {
-  send(command: PutCommand | UpdateCommand): Promise<unknown>;
+  send(command: GetCommand | PutCommand | UpdateCommand): Promise<unknown>;
 }
 
 export class SyncConflictError extends Error {}
@@ -70,6 +71,18 @@ export class DynamoSyncStore {
 
     await this.put(ownerId, record, mutation.expectedRevision);
     return record;
+  }
+
+  public async currentRecord(ownerId: string, recordId: string): Promise<SyncRecordValue | null> {
+    const result = (await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: ownerKey(ownerId), sk: recordKey(recordId) },
+        ConsistentRead: true
+      })
+    )) as { Item?: unknown };
+
+    return result.Item === undefined ? null : fromSyncRecordItem(ownerId, recordId, result.Item);
   }
 
   public async put(
